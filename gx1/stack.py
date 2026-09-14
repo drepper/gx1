@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Iterator, Self
 
 from .config import Config, load
+from .timer import Timer
 from .websocket import OP_CLOSE, OP_TEXT, WebSocket, WebSocketError
 from .x1 import X1Error
 
@@ -147,6 +148,10 @@ class Stack:
     def configuration(self, object_id: int) -> dict[str, Any]:
         """Return the configuration of one object, for example a channel."""
         return self.request('GetConfiguration', object={'id': object_id}).get('object', {})
+
+    def timer(self, channel_id: int) -> Timer:
+        """Return the timer programming of a function timer channel."""
+        return Timer.parse(self.configuration(channel_id))
 
     def in_group(self, group: str) -> bool:
         """Return whether the configured user belongs to the named group."""

@@ -88,6 +88,15 @@ def main() -> int:
                          help='device paths, names, rooms or patterns; at least one')
     dimming.set_defaults(run=command_dim)
 
+    timers = commands.add_parser('timers', help='read out the timer programming')
+    timers.add_argument('paths', nargs='*', metavar='PATH',
+                        help='device paths, names, rooms or patterns; all devices when omitted')
+    timers.add_argument('--all', action='store_true',
+                        help='also list devices that have no switch times programmed')
+    timers.add_argument('--long', action='store_true',
+                        help='also show validity and the scene behind every switch time')
+    timers.set_defaults(run=command_timers)
+
     args = parser.parse_args()
 
     try:
@@ -124,6 +133,53 @@ def command_switch(stack: Stack, project: Project, args: argparse.Namespace) -> 
             continue
         print(f'{project.path(device)} {_state(SWITCH_POINT, str(reply.get("value")))}')
     return 1 if failed else 0
+
+
+def command_timers(stack: Stack, project: Project, args: argparse.Namespace) -> int:
+    """Print the switch times programmed for the selected devices."""
+    devices, failed = _select(project, args.paths) if args.paths else (list(project), False)
+
+    shown = 0
+    for device in devices:
+        if not device.timer_channel or (not device.programmed_slots and not args.all):
+            continue
+        try:
+            timer = stack.timer(device.timer_channel)
+        except gx1.X1Error as e:
+            print(f'{project.path(device)}: {e}', file=sys.stderr)
+            failed = True
+            continue
+
+        shown += 1
+        following = f'next {timer.next_trigger}' if timer.next_trigger else 'nothing due'
+        print(f'{project.path(device)}   [{device.kind}]   {following}')
+        if not timer.switch_times:
+            print('   no switch times programmed')
+        for entry in timer.switch_times:
+            state = 'on ' if entry.active else 'off'
+            print(f'   {entry.index}  {entry.when:<9} {entry.days:<16} {state}  '
+                  f'{_scene(project, timer, entry)}')
+            if args.long:
+                print(f'      scene {entry.trigger_value}, {entry.recurrence}, '
+                      f'valid from {entry.begin_date} ({entry.validity})')
+        print()
+
+    if not shown:
+        print('no timer programming found' if not args.all else 'no timer channels found')
+    return 1 if failed else 0
+
+
+def _scene(project: Project, timer, entry) -> str:
+    """Describe what a switch time does, resolved through its scene."""
+    scene = timer.scene(entry)
+    if scene is None:
+        return f'scene {entry.trigger_value} (unknown)'
+    actions = ', '.join(
+        f'{project.point_kind(a.point_id) or a.point_id} '
+        f'{_state(project.point_kind(a.point_id), a.value)}'
+        + (f' after {a.delay}s' if a.delay else '')
+        for a in scene.actions)
+    return actions or f'scene {scene.number} {scene.name!r}'
 
 
 def _percent(text: str) -> int:
@@ -215,10 +271,12 @@ def _state(name: str, value: str | None) -> str:
     """Render one data point value the way a person would read it."""
     if value is None or value == '':
         return '?'
-    if name == 'OnOff':
+    if name == SWITCH_POINT:
         return {'0': 'off', '1': 'on'}.get(value, value)
-    if name == 'Brightness':
+    if name == BRIGHTNESS_POINT:
         return f'{value}%'
+    if name == COVER_POINT:
+        return {'0': 'up', '1': 'down'}.get(value, value)
     return value
 
 

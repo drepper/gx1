@@ -48,6 +48,8 @@ class Device:
     function_type: str = ''
     channel_type: str = ''
     data_points: tuple[DataPoint, ...] = ()
+    timer_channel: int = 0
+    programmed_slots: int = 0
 
     @property
     def kind(self) -> str:
@@ -159,6 +161,22 @@ class Project:
             return [d for p, d in paths.items() if p.lower().startswith(wanted)]
         return [d for d in self.devices.values() if d.name.lower() == wanted]
 
+    def point_name(self, point_id: int) -> str:
+        """Return ``device/point`` for a data point id, for readable scene output."""
+        for device in self.devices.values():
+            for point in device.data_points:
+                if point.point_id == point_id and point.usable:
+                    return f'{device.name}/{point.name}'
+        return str(point_id)
+
+    def point_kind(self, point_id: int) -> str:
+        """Return the name of a data point, for example ``OnOff``."""
+        for device in self.devices.values():
+            for point in device.data_points:
+                if point.point_id == point_id and point.usable:
+                    return point.name
+        return ''
+
     def groupings(self) -> dict[str, list[Group]]:
         """Return the non-empty groups by kind, for example ``Trade`` or ``Location``."""
         result: dict[str, list[Group]] = {}
@@ -186,7 +204,9 @@ def _device(entry: dict[str, Any]) -> Device:
     return Device(name=str(entry['name']), view_id=int(entry['channelViewID']),
                   view_urn=str(entry.get('channelViewUrn', '')),
                   function_type=str(entry.get('functionType', '')),
-                  channel_type=str(entry.get('channelType', '')), data_points=points)
+                  channel_type=str(entry.get('channelType', '')), data_points=points,
+                  timer_channel=int(entry.get('switchTimeChannelID') or 0),
+                  programmed_slots=len(entry.get('switchTimes') or []))
 
 
 def _groups(node: dict[str, Any]) -> Iterator[Group]:
