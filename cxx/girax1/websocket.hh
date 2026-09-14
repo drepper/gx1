@@ -8,6 +8,7 @@
 
 #include <gnutls/gnutls.h>
 
+#include "compat.hh"
 #include "error.hh"
 
 namespace girax1 {
@@ -39,8 +40,8 @@ namespace girax1 {
     ~websocket();
 
     // Neither the socket nor the TLS session may be owned twice.
-    websocket(const websocket&) = delete ("a TLS session cannot be copied");
-    websocket& operator=(const websocket&) = delete ("a TLS session cannot be copied");
+    websocket(const websocket&) = GIRAX1_DELETED("a TLS session cannot be copied");
+    websocket& operator=(const websocket&) = GIRAX1_DELETED("a TLS session cannot be copied");
     websocket(websocket&& other) noexcept;
     websocket& operator=(websocket&& other) noexcept;
 

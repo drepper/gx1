@@ -10,7 +10,16 @@
 # GCC is used by default because the C++26 features below need a recent one; an
 # override on the command line still wins.
 CXX = g++
-CXXSTD = -std=c++26
+
+# The sources are written for C++26 but need no more than C++23, so the newest
+# standard the compiler accepts is used and the sources adapt through the
+# feature test macros in girax1/compat.hh.  Setting CXXSTD on the command line
+# overrides the choice.
+STANDARDS = c++26 c++23
+WORKING_STANDARDS := $(foreach s,$(STANDARDS),\
+	$(shell echo 'int main(){}' | $(CXX) -std=$(s) -x c++ - -o /dev/null 2>/dev/null && echo $(s)))
+CXXSTD ?= -std=$(firstword $(WORKING_STANDARDS))
+
 WARNINGS = -Wall -Wextra -Wpedantic
 OPTIMIZE ?= -O2 -g
 
@@ -29,8 +38,9 @@ LDLIBS = $(PKG_LIBS)
 LIB_DIR = $(SRC_DIR)/girax1
 LIB_SOURCES = $(LIB_DIR)/config.cc $(LIB_DIR)/websocket.cc $(LIB_DIR)/timer.cc \
 	      $(LIB_DIR)/project.cc $(LIB_DIR)/stack.cc
-LIB_HEADERS = $(LIB_DIR)/error.hh $(LIB_DIR)/config.hh $(LIB_DIR)/websocket.hh \
-	      $(LIB_DIR)/timer.hh $(LIB_DIR)/project.hh $(LIB_DIR)/stack.hh
+LIB_HEADERS = $(LIB_DIR)/compat.hh $(LIB_DIR)/error.hh $(LIB_DIR)/config.hh \
+	      $(LIB_DIR)/websocket.hh $(LIB_DIR)/timer.hh $(LIB_DIR)/project.hh \
+	      $(LIB_DIR)/stack.hh
 PROGRAM_SOURCES = $(SRC_DIR)/x1.cc
 
 LIB_OBJECTS = $(patsubst $(SRC_DIR)/%.cc,$(BUILD_DIR)/%.o,$(LIB_SOURCES))

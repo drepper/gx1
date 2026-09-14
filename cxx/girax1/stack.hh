@@ -7,6 +7,7 @@
 #include <json/json.h>
 
 #include "config.hh"
+#include "compat.hh"
 #include "error.hh"
 #include "project.hh"
 #include "timer.hh"
@@ -43,8 +44,8 @@ namespace girax1 {
     explicit stack(girax1::config settings) : config_(std::move(settings)) {}
 
     // A live session cannot be shared.
-    stack(const stack&) = delete("a device session cannot be copied");
-    stack& operator=(const stack&) = delete("a device session cannot be copied");
+    stack(const stack&) = GIRAX1_DELETED("a device session cannot be copied");
+    stack& operator=(const stack&) = GIRAX1_DELETED("a device session cannot be copied");
     stack(stack&&) noexcept = default;
     stack& operator=(stack&&) noexcept = default;
 
