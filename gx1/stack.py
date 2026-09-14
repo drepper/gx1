@@ -168,6 +168,45 @@ class Stack:
         return self.request('SetConfiguration',
                             object={'id': channel_id, 'timer': {'switchTimes': [entry]}})
 
+    def add_switch_time(self, channel_id: int, index: int, *, time: str, weekdays: str,
+                        trigger_value: int, active: bool = False) -> dict[str, Any]:
+        """Add a switch time to a timer channel under a free index.
+
+        ``weekdays`` has to be in the encoding :func:`gx1.timer.write_days`
+        produces.  ``trigger_value`` names a scene of the channel, which has to
+        exist already; see :meth:`set_scene_set`.
+        """
+        return self.request('SetConfiguration', object={'id': channel_id, 'timer': {
+            'switchTimes': [{'index': str(index), 'active': 'true' if active else 'false',
+                             'recurrence': 'daily', 'weekdays': weekdays,
+                             'timeType': 'pointInTime', 'time': time,
+                             'randomTimeFunction': 'false',
+                             'triggerValue': str(trigger_value)}]}})
+
+    def remove_switch_time(self, channel_id: int, index: int) -> dict[str, Any]:
+        """Delete one switch time of a timer channel."""
+        return self.request('SetConfiguration', object={'id': channel_id, 'timer': {
+            'switchTimes': [{'index': str(index), 'remove': 'true'}]}})
+
+    def set_scene_set(self, channel_id: int, point_id: int,
+                      scenes: list[tuple[int, str, str]]) -> dict[str, Any]:
+        """Define the scenes of a timer channel, each writing one data point.
+
+        Every scene is given as its number, its name and the value to write.
+        This replaces whatever scenes the channel had, so it is only safe on a
+        channel that has none.
+        """
+        return self.request('SetConfiguration', object={'id': channel_id, 'sceneSet': {
+            'datapoints': [{'id': point_id}],
+            'scenes': [{'number': str(number), 'name': name,
+                        'datapoints': [{'id': point_id, 'value': value}]}
+                       for number, name, value in scenes]}})
+
+    def clear_scenes(self, channel_id: int) -> dict[str, Any]:
+        """Remove every scene of a timer channel, as the app does with the last switch time."""
+        return self.request('SetConfiguration', object={
+            'id': channel_id, 'sceneSet': {'clear': 'true', 'clearParameters': 'scenes'}})
+
     def in_group(self, group: str) -> bool:
         """Return whether the configured user belongs to the named group."""
         return str(self.request('CheckGroup', group=group).get('isInGroup')) == 'true'

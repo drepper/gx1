@@ -113,6 +113,25 @@ def main() -> int:
                          help='number of the scene to apply, as shown by timers --long')
     setting.set_defaults(run=command_settime)
 
+    adding = commands.add_parser('addtime', help='program a new switch time')
+    adding.add_argument('path', metavar='PATH', help='the device to program')
+    adding.add_argument('time', metavar='TIME', help='time of day as HH:MM or HH:MM:SS')
+    adding.add_argument('action', metavar='ACTION',
+                        help='what to do: on, off, up, down, or a brightness from 0 to 100')
+    adding.add_argument('--days', default='daily', metavar='DAYS',
+                        help='days to act on (default: daily)')
+    adding.add_argument('--active', action=argparse.BooleanOptionalAction, default=False,
+                        help='program the entry as active; it is added switched off by default')
+    adding.set_defaults(run=command_addtime)
+
+    deleting = commands.add_parser('deltime', help='delete a programmed switch time')
+    deleting.add_argument('path', metavar='PATH', help='the device whose timer to change')
+    deleting.add_argument('index', type=int, metavar='INDEX',
+                          help='which switch time, as shown by the timers command')
+    deleting.add_argument('--keep-scenes', action='store_true',
+                          help='do not remove the scenes when the last switch time goes')
+    deleting.set_defaults(run=command_deltime)
+
     commands.add_parser('gui', help='show the graphical user interface'
                         ).set_defaults(run=command_gui)
 
@@ -190,18 +209,146 @@ def _time_of_day(text: str) -> str:
     return f'{hour:02d}:{minute:02d}:{second:02d}'
 
 
+# What each action writes, and the scenes to create when a channel has none.
+# The names follow the ones the Gira app itself uses.
+ACTIONS = {'on': (SWITCH_POINT, '1', 'switch'), 'off': (SWITCH_POINT, '0', 'switch'),
+           'up': (COVER_POINT, '0', 'move'), 'down': (COVER_POINT, '1', 'move')}
+DEFAULT_SCENES = {'switch': [(1, 'switch-1', '1'), (2, 'switch-0', '0')],
+                  'move': [(1, 'move-0', '0'), (2, 'move-1', '1')],
+                  'dim': [(i + 1, f'dim-{v}', str(v))
+                          for i, v in enumerate(range(0, BRIGHTNESS_MAX + 1, 10))]}
+
+
+def _action(device: Device, text: str) -> tuple[object, str, str]:
+    """Return the data point, the value and the scene family an action names."""
+    if (known := ACTIONS.get(text.lower())) is not None:
+        name, value, family = known
+    elif text.isdigit() and 0 <= int(text) <= BRIGHTNESS_MAX:
+        name, value, family = BRIGHTNESS_POINT, str(int(text)), 'dim'
+    else:
+        raise ValueError(f'{text!r} is not an action; use on, off, up, down '
+                         f'or a brightness from 0 to {BRIGHTNESS_MAX}')
+    point = device.point(name)
+    if point is None or not point.usable:
+        raise ValueError(f'a {device.kind} has no {name} data point, so it cannot do {text!r}')
+    return point, value, family
+
+
+def _same_value(one: str, other: str) -> bool:
+    """Compare two data point values, which the device may spell differently."""
+    try:
+        return int(float(one)) == int(float(other))
+    except (TypeError, ValueError):
+        return str(one) == str(other)
+
+
+def _scene_for(timer, point_id: int, value: str) -> int | None:
+    """Return the number of the scene writing this value, if one exists."""
+    for number, scene in sorted((timer.scenes or {}).items()):
+        if any(a.point_id == point_id and _same_value(a.value, value) for a in scene.actions):
+            return number
+    return None
+
+
+def command_addtime(stack: Stack, project: Project, args: argparse.Namespace) -> int:
+    """Program a new switch time for one device."""
+    device = _one(project, args.path)
+    if device is None:
+        return 1
+    if not device.timer_channel:
+        print(f'{project.path(device)} has no timer channel', file=sys.stderr)
+        return 1
+    try:
+        point, value, family = _action(device, args.action)
+        when = _time_of_day(args.time)
+        days = write_days(_days(args.days))
+    except (ValueError, argparse.ArgumentTypeError) as e:
+        print(e, file=sys.stderr)
+        return 1
+
+    try:
+        timer = stack.timer(device.timer_channel)
+        scene = _scene_for(timer, point.point_id, value)
+        if scene is None:
+            if timer.scenes:
+                print(f'{project.path(device)}: no scene writes {args.action!r}; '
+                      f'the channel already has scenes, so none are created',
+                      file=sys.stderr)
+                return 1
+            # A channel without scenes gets the set the app would create for it.
+            stack.set_scene_set(device.timer_channel, point.point_id, DEFAULT_SCENES[family])
+            timer = stack.timer(device.timer_channel)
+            scene = _scene_for(timer, point.point_id, value)
+            if scene is None:
+                print(f'{project.path(device)}: the device did not take the scenes',
+                      file=sys.stderr)
+                return 1
+
+        index = max((e.index for e in timer.switch_times), default=0) + 1
+        stack.add_switch_time(device.timer_channel, index, time=when, weekdays=days,
+                              trigger_value=scene, active=args.active)
+        timer = stack.timer(device.timer_channel)
+    except (gx1.X1Error, TimeoutError) as e:
+        print(f'{project.path(device)}: {e}', file=sys.stderr)
+        return 1
+
+    entry = next((e for e in timer.switch_times if e.index == index), None)
+    if entry is None:
+        print(f'{project.path(device)}: the device did not keep the new switch time',
+              file=sys.stderr)
+        return 1
+    print(f'{project.path(device)}  {entry.index}  {entry.when}  {entry.days}  '
+          f'{"on" if entry.active else "off"}  {_scene(project, timer, entry)}')
+    return 0
+
+
+def command_deltime(stack: Stack, project: Project, args: argparse.Namespace) -> int:
+    """Delete one programmed switch time."""
+    device = _one(project, args.path)
+    if device is None:
+        return 1
+    if not device.timer_channel:
+        print(f'{project.path(device)} has no timer channel', file=sys.stderr)
+        return 1
+    try:
+        timer = stack.timer(device.timer_channel)
+        if not any(e.index == args.index for e in timer.switch_times):
+            available = ', '.join(str(e.index) for e in timer.switch_times) or 'none'
+            print(f'{project.path(device)} has no switch time {args.index}; '
+                  f'programmed: {available}', file=sys.stderr)
+            return 1
+        stack.remove_switch_time(device.timer_channel, args.index)
+        timer = stack.timer(device.timer_channel)
+        # The app drops the scenes along with the last switch time that used them.
+        if not timer.switch_times and not args.keep_scenes:
+            stack.clear_scenes(device.timer_channel)
+    except (gx1.X1Error, TimeoutError) as e:
+        print(f'{project.path(device)}: {e}', file=sys.stderr)
+        return 1
+
+    remaining = ', '.join(str(e.index) for e in timer.switch_times) or 'none'
+    print(f'{project.path(device)}: switch time {args.index} deleted, remaining: {remaining}')
+    return 0
+
+
+def _one(project: Project, path: str) -> Device | None:
+    """Return the single device a path names, complaining when it is not exactly one."""
+    matches = project.resolve(path)
+    if len(matches) != 1:
+        print(f'{path!r} matches {len(matches)} devices, name exactly one', file=sys.stderr)
+        return None
+    return matches[0]
+
+
 def command_settime(stack: Stack, project: Project, args: argparse.Namespace) -> int:
     """Change one programmed switch time of one device."""
     if args.time is None and args.days is None and args.active is None and args.scene is None:
         print('nothing to change; give a time, --days, --active or --scene', file=sys.stderr)
         return 1
 
-    matches = project.resolve(args.path)
-    if len(matches) != 1:
-        print(f'{args.path!r} matches {len(matches)} devices, name exactly one',
-              file=sys.stderr)
+    device = _one(project, args.path)
+    if device is None:
         return 1
-    device = matches[0]
     if not device.timer_channel:
         print(f'{project.path(device)} has no timer channel', file=sys.stderr)
         return 1
