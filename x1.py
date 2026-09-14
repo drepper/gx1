@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Callable
 
 import gx1
-from gx1.project import Device, Project
+from gx1.project import WILDCARDS, Device, Project
 from gx1.stack import BRIGHTNESS_MAX, Stack
 
 DEFAULT_CONFIG = Path(os.environ.get('GX1_CONFIG', '~/.config/gx1.toml'))
@@ -213,14 +213,20 @@ def _percent(text: str) -> int:
 def command_dim(stack: Stack, project: Project, args: argparse.Namespace) -> int:
     """Set the brightness of every named light.
 
-    Devices without a brightness are passed over in silence, so that naming a
-    whole room does not produce a complaint about every switch and covering in
-    it.
+    A device named on its own is expected to be dimmable, so saying that it is
+    not is useful.  One picked up by a room or a pattern is passed over in
+    silence, because a room is mostly switches and coverings and complaining
+    about each would bury the line that matters.
     """
     devices, failed = _select(project, args.paths)
+    named = _named(project, args.paths)
     for device in devices:
         point = device.point(BRIGHTNESS_POINT)
         if point is None or not point.usable:
+            if device.view_id in named:
+                print(f'{project.path(device)}: no {BRIGHTNESS_POINT} data point, '
+                      f'a {device.kind} cannot be dimmed', file=sys.stderr)
+                failed = True
             continue
         try:
             reply = stack.dim(point.point_id, args.level)
@@ -258,6 +264,20 @@ def command_cover(stack: Stack, project: Project, args: argparse.Namespace) -> i
             continue
         print(f'{project.path(device)} {args.action}')
     return 1 if failed else 0
+
+
+def _named(project: Project, patterns: list[str]) -> set[int]:
+    """Return the devices that were named on their own rather than swept up.
+
+    A pattern containing a wildcard, and a room written with a trailing slash,
+    select whatever happens to be there.  Anything else names one device.
+    """
+    named: set[int] = set()
+    for pattern in patterns:
+        if pattern.endswith('/') or any(c in pattern for c in WILDCARDS):
+            continue
+        named.update(d.view_id for d in project.resolve(pattern))
+    return named
 
 
 def _select(project: Project, patterns: list[str]) -> tuple[list[Device], bool]:
