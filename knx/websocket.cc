@@ -98,7 +98,7 @@ namespace knx {
     if (fd_ >= 0 && ! closed_) {
       // 1000 is the normal closure status of RFC 6455.
       const std::array<char, 2> status{'\x03', '\xe8'};
-      static_cast<void>(send(std::string_view(status.data(), status.size()), opcode::close));
+      auto _ = send(std::string_view(status.data(), status.size()), opcode::close);
     }
     discard();
   }
