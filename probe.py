@@ -11,8 +11,8 @@ import sys
 from base64 import b64encode
 from dataclasses import replace
 
-import gx1
-from gx1.x1 import X1
+import girax1
+from girax1.x1 import X1
 
 CANDIDATES = [
     '/',
@@ -47,8 +47,8 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        config = gx1.load(args.config)
-    except gx1.ConfigError as e:
+        config = girax1.load(args.config)
+    except girax1.ConfigError as e:
         print(f'configuration error: {e}', file=sys.stderr)
         return 1
     if args.tls is not None:

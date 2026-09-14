@@ -1,6 +1,6 @@
 """Structured view of the project configuration of a Gira X1.
 
-:meth:`gx1.stack.Stack.ui_configuration` returns a flat list mixing two kinds of
+:meth:`girax1.stack.Stack.ui_configuration` returns a flat list mixing two kinds of
 entry: one per configured function, and a single ``Root`` entry holding a tree
 that groups those functions by trade and by location.  This module turns both
 into objects that are pleasant to work with.

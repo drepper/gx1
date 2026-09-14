@@ -1,7 +1,7 @@
 """Configuration file handling for the Gira X1 client.
 
 The configuration is a TOML file.  It is never part of the repository since it
-contains the credentials of the X1 device.  See ``gx1.toml.example``.
+contains the credentials of the X1 device.  See ``girax1.toml.example``.
 """
 
 import tomllib
@@ -12,7 +12,7 @@ from typing import Any
 DEFAULT_PORT_TLS = 443
 DEFAULT_PORT_PLAIN = 80
 DEFAULT_TIMEOUT = 10.0
-DEFAULT_CLIENT_ID = 'org.akkadia.gx1'
+DEFAULT_CLIENT_ID = 'org.akkadia.girax1'
 
 
 class ConfigError(Exception):

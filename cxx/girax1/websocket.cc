@@ -12,7 +12,7 @@
 #include <unistd.h>
 #include <sys/socket.h>
 
-namespace knx {
+namespace girax1 {
 
   namespace {
 
@@ -338,4 +338,4 @@ namespace knx {
     }
   }
 
-} // namespace knx
+} // namespace girax1

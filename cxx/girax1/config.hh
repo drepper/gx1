@@ -6,7 +6,7 @@
 
 #include "error.hh"
 
-namespace knx {
+namespace girax1 {
 
   // Port on which a Gira X1 serves the Device Stack API.
   inline constexpr unsigned stack_port = 4432;
@@ -30,4 +30,4 @@ namespace knx {
   // Expand a leading ~ to the home directory of the user.
   std::filesystem::path expand_user(std::filesystem::path path);
 
-} // namespace knx
+} // namespace girax1

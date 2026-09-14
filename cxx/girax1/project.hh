@@ -8,7 +8,7 @@
 
 #include <json/json.h>
 
-namespace knx {
+namespace girax1 {
 
   // Characters that turn a device path into a pattern.
   inline constexpr std::string_view wildcards = "*?[";
@@ -102,4 +102,4 @@ namespace knx {
     std::string guid_{};
   };
 
-} // namespace knx
+} // namespace girax1

@@ -24,12 +24,12 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-import gx1
-from gx1.project import WILDCARDS, Device, Project
-from gx1.stack import BRIGHTNESS_MAX, Stack
-from gx1.timer import WEEKDAYS, write_days
+import girax1
+from girax1.project import WILDCARDS, Device, Project
+from girax1.stack import BRIGHTNESS_MAX, Stack
+from girax1.timer import WEEKDAYS, write_days
 
-DEFAULT_CONFIG = Path(os.environ.get('GX1_CONFIG', '~/.config/gx1.toml'))
+DEFAULT_CONFIG = Path(os.environ.get('GIRAX1_CONFIG', '~/.config/girax1.toml'))
 
 # The data point that switching a device on and off writes to.
 SWITCH_POINT = 'OnOff'
@@ -142,10 +142,10 @@ def main() -> int:
             project = Project.parse(stack.ui_configuration())
             run: Callable[[Stack, Project, argparse.Namespace], int] = args.run
             return run(stack, project, args)
-    except gx1.ConfigError as e:
+    except girax1.ConfigError as e:
         print(f'configuration error: {e}', file=sys.stderr)
         return 1
-    except gx1.X1Error as e:
+    except girax1.X1Error as e:
         print(f'error: {e}', file=sys.stderr)
         return 1
     except TimeoutError:
@@ -165,7 +165,7 @@ def command_switch(stack: Stack, project: Project, args: argparse.Namespace) -> 
             continue
         try:
             reply = stack.switch(point.point_id, args.state)
-        except gx1.X1Error as e:
+        except girax1.X1Error as e:
             print(f'{project.path(device)}: {e}', file=sys.stderr)
             failed = True
             continue
@@ -288,7 +288,7 @@ def command_addtime(stack: Stack, project: Project, args: argparse.Namespace) ->
         stack.add_switch_time(device.timer_channel, index, time=when, weekdays=days,
                               trigger_value=scene, active=args.active)
         timer = stack.timer(device.timer_channel)
-    except (gx1.X1Error, TimeoutError) as e:
+    except (girax1.X1Error, TimeoutError) as e:
         print(f'{project.path(device)}: {e}', file=sys.stderr)
         return 1
 
@@ -322,7 +322,7 @@ def command_deltime(stack: Stack, project: Project, args: argparse.Namespace) ->
         # The app drops the scenes along with the last switch time that used them.
         if not timer.switch_times and not args.keep_scenes:
             stack.clear_scenes(device.timer_channel)
-    except (gx1.X1Error, TimeoutError) as e:
+    except (girax1.X1Error, TimeoutError) as e:
         print(f'{project.path(device)}: {e}', file=sys.stderr)
         return 1
 
@@ -355,7 +355,7 @@ def command_settime(stack: Stack, project: Project, args: argparse.Namespace) ->
 
     try:
         timer = stack.timer(device.timer_channel)
-    except (gx1.X1Error, TimeoutError) as e:
+    except (girax1.X1Error, TimeoutError) as e:
         print(f'{project.path(device)}: {e}', file=sys.stderr)
         return 1
     if not any(e.index == args.index for e in timer.switch_times):
@@ -379,7 +379,7 @@ def command_settime(stack: Stack, project: Project, args: argparse.Namespace) ->
     try:
         stack.set_switch_time(device.timer_channel, args.index, **fields)
         timer = stack.timer(device.timer_channel)
-    except (gx1.X1Error, TimeoutError) as e:
+    except (girax1.X1Error, TimeoutError) as e:
         print(f'{project.path(device)}: {e}', file=sys.stderr)
         return 1
 
@@ -398,7 +398,7 @@ def command_gui(stack: Stack, project: Project, args: argparse.Namespace) -> int
     a machine where it is not installed.
     """
     try:
-        from gx1 import gui
+        from girax1 import gui
     except ImportError as e:
         print(f'the graphical interface needs Tk: {e}', file=sys.stderr)
         return 1
@@ -415,7 +415,7 @@ def command_timers(stack: Stack, project: Project, args: argparse.Namespace) -> 
             continue
         try:
             timer = stack.timer(device.timer_channel)
-        except gx1.X1Error as e:
+        except girax1.X1Error as e:
             print(f'{project.path(device)}: {e}', file=sys.stderr)
             failed = True
             continue
@@ -483,7 +483,7 @@ def command_dim(stack: Stack, project: Project, args: argparse.Namespace) -> int
             continue
         try:
             reply = stack.dim(point.point_id, args.level)
-        except gx1.X1Error as e:
+        except girax1.X1Error as e:
             print(f'{project.path(device)}: {e}', file=sys.stderr)
             failed = True
             continue
@@ -511,7 +511,7 @@ def command_cover(stack: Stack, project: Project, args: argparse.Namespace) -> i
                 stack.stop(point.point_id)
             else:
                 stack.move(point.point_id, args.action == 'down')
-        except gx1.X1Error as e:
+        except girax1.X1Error as e:
             print(f'{project.path(device)}: {e}', file=sys.stderr)
             failed = True
             continue

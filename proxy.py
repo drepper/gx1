@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 from typing import TextIO
 
-import gx1
+import girax1
 
 DEFAULT_PORTS = [80, 8080]
 BODY_EXCERPT = 2000
@@ -419,8 +419,8 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        config = gx1.load(args.config)
-    except gx1.ConfigError as e:
+        config = girax1.load(args.config)
+    except girax1.ConfigError as e:
         print(f'configuration error: {e}', file=sys.stderr)
         return 1
 

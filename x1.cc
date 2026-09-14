@@ -8,7 +8,7 @@
 // device name, for example "Flur/Deckenlampen Flur".
 //
 // The library only ever acts on a single device.  Where a command accepts a
-// pattern, this program expands it through knx::project::matching and then asks
+// pattern, this program expands it through girax1::project::matching and then asks
 // the library about one device at a time.
 
 #include <algorithm>
@@ -25,10 +25,10 @@
 #include <string_view>
 #include <vector>
 
-#include "knx/config.hh"
-#include "knx/project.hh"
-#include "knx/stack.hh"
-#include "knx/timer.hh"
+#include "girax1/config.hh"
+#include "girax1/project.hh"
+#include "girax1/stack.hh"
+#include "girax1/timer.hh"
 
 namespace {
 
@@ -39,7 +39,7 @@ namespace {
   constexpr std::string_view brightness_point = "Brightness";
 
   // Where the configuration lives unless told otherwise.
-  constexpr std::string_view default_config = "~/.config/gx1.toml";
+  constexpr std::string_view default_config = "~/.config/girax1.toml";
 
   // Print a message on the error stream.
   template<typename... Args>
@@ -129,13 +129,13 @@ namespace {
     for (const auto piece : std::views::split(text, ',')) {
       const std::string_view part(piece.begin(), piece.end());
       const auto dash = part.find('-');
-      const auto first = knx::weekday_number(dash == std::string_view::npos
+      const auto first = girax1::weekday_number(dash == std::string_view::npos
                                              ? part : part.substr(0, dash));
       const auto last = dash == std::string_view::npos
-        ? first : knx::weekday_number(part.substr(dash + 1));
+        ? first : girax1::weekday_number(part.substr(dash + 1));
       if (!first || !last) [[unlikely]]
         return std::nullopt;
-      for (unsigned day = *first;; day = (day + 1) % knx::weekday_names.size()) {
+      for (unsigned day = *first;; day = (day + 1) % girax1::weekday_names.size()) {
         days.insert(day);
         if (day == *last)
           break;
@@ -146,18 +146,18 @@ namespace {
 
   // Everything a command needs: the open session and the downloaded project.
   struct session {
-    knx::stack& device;
-    const knx::project& plan;
+    girax1::stack& device;
+    const girax1::project& plan;
   };
 
   // Collect the devices a list of patterns selects, without repeating any.
   //
   // This is where the single device interface of the library is turned into
   // work on many: the generator yields paths, and each is looked up on its own.
-  std::pair<std::vector<const knx::device*>, bool>
-  select(const knx::project& plan, std::span<const std::string> patterns)
+  std::pair<std::vector<const girax1::device*>, bool>
+  select(const girax1::project& plan, std::span<const std::string> patterns)
   {
-    std::vector<const knx::device*> found;
+    std::vector<const girax1::device*> found;
     bool failed = false;
     for (const auto& pattern : patterns) {
       bool any = false;
@@ -176,12 +176,12 @@ namespace {
   }
 
   // Return the devices that were named on their own rather than swept up.
-  std::set<unsigned> named_alone(const knx::project& plan,
+  std::set<unsigned> named_alone(const girax1::project& plan,
                                  std::span<const std::string> patterns)
   {
     std::set<unsigned> named;
     for (const auto& pattern : patterns) {
-      if (pattern.ends_with('/') || pattern.find_first_of(knx::wildcards) != std::string::npos)
+      if (pattern.ends_with('/') || pattern.find_first_of(girax1::wildcards) != std::string::npos)
         continue;
       for (const auto& path : plan.matching(pattern))
         if (const auto* one = plan.find(path); one != nullptr)
@@ -191,9 +191,9 @@ namespace {
   }
 
   // Return the single device a path names, complaining when it is not one.
-  const knx::device* exactly_one(const knx::project& plan, const std::string& path)
+  const girax1::device* exactly_one(const girax1::project& plan, const std::string& path)
   {
-    std::vector<const knx::device*> found;
+    std::vector<const girax1::device*> found;
     for (const auto& match : plan.matching(path))
       if (const auto* one = plan.find(match); one != nullptr)
         found.push_back(one);
@@ -205,8 +205,8 @@ namespace {
   }
 
   // Describe what a switch time does, resolved through its scene.
-  std::string scene_text(const knx::project& plan, const knx::timer& programming,
-                         const knx::switch_time& entry)
+  std::string scene_text(const girax1::project& plan, const girax1::timer& programming,
+                         const girax1::switch_time& entry)
   {
     const auto* found = programming.scene_of(entry);
     if (found == nullptr)
@@ -239,7 +239,7 @@ namespace {
       }
     }
 
-    const auto show = [&](const knx::device& one, std::string_view indent) {
+    const auto show = [&](const girax1::device& one, std::string_view indent) {
       std::println("{}{:<28} {:<10} id={}", indent, one.name, one.kind(), one.view_id);
       if (!detailed)
         return;
@@ -293,7 +293,7 @@ namespace {
   int command_status(session use, std::span<const std::string> arguments)
   {
     auto [devices, failed] = arguments.empty()
-      ? std::pair{std::vector<const knx::device*>{}, false}
+      ? std::pair{std::vector<const girax1::device*>{}, false}
       : select(use.plan, arguments);
     if (arguments.empty())
       for (const auto& one : use.plan.devices())
@@ -384,8 +384,8 @@ namespace {
       return 1;
     }
     const auto percent = as_number(arguments[0]);
-    if (!percent || *percent > knx::brightness_max) [[unlikely]] {
-      complain("dim: brightness has to be between 0 and {}", knx::brightness_max);
+    if (!percent || *percent > girax1::brightness_max) [[unlikely]] {
+      complain("dim: brightness has to be between 0 and {}", girax1::brightness_max);
       return 1;
     }
     // Devices without a brightness are passed over unless named on their own.
@@ -409,7 +409,7 @@ namespace {
     }
 
     auto [devices, failed] = patterns.empty()
-      ? std::pair{std::vector<const knx::device*>{}, false}
+      ? std::pair{std::vector<const girax1::device*>{}, false}
       : select(use.plan, patterns);
     if (patterns.empty())
       for (const auto& one : use.plan.devices())
@@ -446,7 +446,7 @@ namespace {
   }
 
   // Print one switch time the way the timer commands report a change.
-  void report(session use, const knx::device& one, const knx::timer& programming,
+  void report(session use, const girax1::device& one, const girax1::timer& programming,
               unsigned index)
   {
     if (const auto* entry = programming.entry(index); entry != nullptr)
@@ -483,7 +483,7 @@ namespace {
           complain("settime: '{}' is not a days specification", arguments[i]);
           return 1;
         }
-        fields["weekdays"] = knx::write_days(*days);
+        fields["weekdays"] = girax1::write_days(*days);
         fields["recurrence"] = "daily";
       } else if (argument == "--active" || argument == "--no-active")
         fields["active"] = argument == "--active" ? "true" : "false";
@@ -496,7 +496,7 @@ namespace {
         fields["triggerValue"] = std::format("{}", *scene);
       } else if (const auto when = time_of_day(argument); when) {
         fields["time"] = *when;
-        fields["timeType"] = std::string(knx::point_in_time);
+        fields["timeType"] = std::string(girax1::point_in_time);
       } else [[unlikely]] {
         complain("settime: unexpected argument '{}'", argument);
         return 1;
@@ -571,13 +571,13 @@ namespace {
       value = action == "down" ? "1" : "0";
       family = "move";
     } else if (const auto percent = as_number(action);
-               percent && *percent <= knx::brightness_max) {
+               percent && *percent <= girax1::brightness_max) {
       point_name = brightness_point;
       value = std::format("{}", *percent);
       family = "dim";
     } else [[unlikely]] {
       complain("'{}' is not an action; use on, off, up, down or a brightness from 0 to {}",
-               action, knx::brightness_max);
+               action, girax1::brightness_max);
       return 1;
     }
 
@@ -614,7 +614,7 @@ namespace {
       return 1;
     }
 
-    const auto scene_writing = [&](const knx::timer& in) -> std::optional<unsigned> {
+    const auto scene_writing = [&](const girax1::timer& in) -> std::optional<unsigned> {
       for (const auto& [number, which] : in.scenes)
         for (const auto& made : which.actions)
           if (made.point_id == point->point_id
@@ -637,7 +637,7 @@ namespace {
       else if (family == "move")
         wanted = {{1, "move-0", "0"}, {2, "move-1", "1"}};
       else
-        for (unsigned step = 0, number = 1; step <= knx::brightness_max; step += 10, ++number)
+        for (unsigned step = 0, number = 1; step <= girax1::brightness_max; step += 10, ++number)
           wanted.emplace_back(number, std::format("dim-{}", step), std::format("{}", step));
 
       if (auto made = use.device.set_scene_set(one->timer_channel, point->point_id, wanted);
@@ -659,7 +659,7 @@ namespace {
 
     const auto index = programming->free_index();
     if (auto added = use.device.add_switch_time(one->timer_channel, index, *when,
-                                                knx::write_days(days), *scene, active);
+                                                girax1::write_days(days), *scene, active);
         !added) [[unlikely]] {
       complain("{}: {}", use.plan.path(*one), added.error().message);
       return 1;
@@ -824,13 +824,13 @@ int main(int argc, char** argv)
   const std::span rest(arguments.begin() + static_cast<std::ptrdiff_t>(at) + 1,
                        arguments.end());
 
-  auto settings = knx::load_config(settings_file);
+  auto settings = girax1::load_config(settings_file);
   if (!settings) [[unlikely]] {
     complain("configuration error: {}", settings.error().message);
     return 1;
   }
 
-  knx::stack device(*settings);
+  girax1::stack device(*settings);
   if (auto opened = device.connect(); !opened) [[unlikely]] {
     complain("error: {}", opened.error().message);
     return 1;

@@ -1,4 +1,4 @@
-# Build the knx library and the x1 program.
+# Build the girax1 library and the x1 program.
 #
 # The library talks to a Gira X1 over the Device Stack API, a WebSocket
 # protocol carried over TLS.  GnuTLS provides the transport, toml++ reads the
@@ -15,14 +15,18 @@ PKGS = gnutls jsoncpp
 PKG_CFLAGS := $(shell pkg-config --cflags $(PKGS))
 PKG_LIBS := $(shell pkg-config --libs $(PKGS))
 
-CXXFLAGS ?= $(CXXSTD) $(WARNINGS) $(OPTIMIZE) -fPIC $(PKG_CFLAGS)
+# The library headers are reached as <girax1/...>, so the directory holding the
+# girax1 directory is what goes on the include path.
+CXXFLAGS ?= $(CXXSTD) $(WARNINGS) $(OPTIMIZE) -fPIC -Icxx $(PKG_CFLAGS)
 LDLIBS = $(PKG_LIBS)
 
-LIB_SOURCES = knx/config.cc knx/websocket.cc knx/timer.cc knx/project.cc knx/stack.cc
+LIB_DIR = cxx/girax1
+LIB_SOURCES = $(LIB_DIR)/config.cc $(LIB_DIR)/websocket.cc $(LIB_DIR)/timer.cc \
+	      $(LIB_DIR)/project.cc $(LIB_DIR)/stack.cc
 LIB_OBJECTS = $(LIB_SOURCES:.cc=.o)
-LIB_HEADERS = knx/error.hh knx/config.hh knx/websocket.hh knx/timer.hh knx/project.hh \
-	      knx/stack.hh
-LIBRARY = libknx.a
+LIB_HEADERS = $(LIB_DIR)/error.hh $(LIB_DIR)/config.hh $(LIB_DIR)/websocket.hh \
+	      $(LIB_DIR)/timer.hh $(LIB_DIR)/project.hh $(LIB_DIR)/stack.hh
+LIBRARY = libgirax1.a
 PROGRAM = x1
 
 all: $(PROGRAM)

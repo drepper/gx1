@@ -4,7 +4,7 @@
 import argparse
 import sys
 
-import gx1
+import girax1
 
 
 def main() -> int:
@@ -14,7 +14,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        with gx1.X1(args.config) as x1:
+        with girax1.X1(args.config) as x1:
             print(f'connected to {x1.config.host}:{x1.config.port}')
             for key, value in x1.info.items():
                 print(f'  {key}: {value}')
@@ -22,10 +22,10 @@ def main() -> int:
                 print('  (device did not answer the availability check)')
             print(f'  token: {x1.token}')
             print(f'  uiconfig uid: {x1.uiconfig_uid()}')
-    except gx1.ConfigError as e:
+    except girax1.ConfigError as e:
         print(f'configuration error: {e}', file=sys.stderr)
         return 1
-    except gx1.X1Error as e:
+    except girax1.X1Error as e:
         print(f'error: {e}', file=sys.stderr)
         return 1
     return 0

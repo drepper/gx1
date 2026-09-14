@@ -4,7 +4,7 @@
 #include <string>
 #include <utility>
 
-namespace knx {
+namespace girax1 {
 
   // Why an operation did not succeed.  A code is only set when the failure was
   // reported by the device itself, in which case it is the code of the Device
@@ -27,4 +27,4 @@ namespace knx {
     return std::unexpected(error{std::move(message), std::move(code)});
   }
 
-} // namespace knx
+} // namespace girax1

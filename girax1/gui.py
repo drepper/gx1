@@ -16,7 +16,7 @@ from tkinter import font as tkfont
 from tkinter import ttk
 from typing import Any
 
-import gx1
+import girax1
 from .project import Device, Project
 from .stack import BRIGHTNESS_MAX, Stack
 from .timer import Timer
@@ -234,7 +234,7 @@ class Application(tk.Tk):
             return
         try:
             reply = action(point.point_id)
-        except (gx1.X1Error, TimeoutError) as e:
+        except (girax1.X1Error, TimeoutError) as e:
             self.note(f'{device.name}: {e}')
             return
         self.values[str(point.point_id)] = str(reply.get('value', ''))
@@ -248,7 +248,7 @@ class Application(tk.Tk):
         try:
             self.values = {str(d.get('id')): str(d.get('state'))
                            for d in self.stack.process_view()}
-        except (gx1.X1Error, TimeoutError) as e:
+        except (girax1.X1Error, TimeoutError) as e:
             self.note(f'cannot read the current values: {e}')
 
     def refresh(self) -> None:
@@ -278,7 +278,7 @@ class Application(tk.Tk):
                 value = event.get('value', {})
                 self.values[str(value.get('id'))] = str(value.get('new'))
                 changed = True
-        except (gx1.X1Error, TimeoutError) as e:
+        except (girax1.X1Error, TimeoutError) as e:
             self.note(f'lost the connection to the device: {e}')
             return
         if changed:
@@ -314,7 +314,7 @@ class Application(tk.Tk):
                 continue
             try:
                 self.timers[device.view_id] = self.stack.timer(device.timer_channel)
-            except (gx1.X1Error, TimeoutError):
+            except (girax1.X1Error, TimeoutError):
                 self.timers[device.view_id] = None
 
 

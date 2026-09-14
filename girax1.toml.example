@@ -1,10 +1,10 @@
 # Configuration for the Gira X1 client.
 #
 # Copy this file, fill in the values for your installation and keep the copy
-# outside of the repository (or rely on .gitignore, which excludes gx1.toml).
+# outside of the repository (or rely on .gitignore, which excludes girax1.toml).
 #
-#     cp gx1.toml.example ~/.config/gx1.toml
-#     chmod 600 ~/.config/gx1.toml
+#     cp girax1.toml.example ~/.config/girax1.toml
+#     chmod 600 ~/.config/girax1.toml
 
 [device]
 # Host name or IP address of the X1 device.  Required.
@@ -25,7 +25,7 @@ password = "PASSWORD"
 
 # Identifier this program registers itself with at the device.  It shows up in
 # the list of registered clients in the X1 and should use a reverse-DNS name.
-client_id = "org.akkadia.gx1"
+client_id = "org.akkadia.girax1"
 
 # A token obtained from an earlier registration.  When set, the client skips
 # the registration step and uses this token instead of username/password.
@@ -44,4 +44,4 @@ enabled = false
 # keep verification enabled.
 verify = false
 
-# ca_cert = "~/.config/gx1-device.pem"
+# ca_cert = "~/.config/girax1-device.pem"

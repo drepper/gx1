@@ -6,7 +6,7 @@
 
 #include <toml++/toml.hpp>
 
-namespace knx {
+namespace girax1 {
 
   std::filesystem::path expand_user(std::filesystem::path path)
   {
@@ -79,4 +79,4 @@ namespace knx {
     return result;
   }
 
-} // namespace knx
+} // namespace girax1

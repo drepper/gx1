@@ -5,8 +5,8 @@ import argparse
 import json
 import sys
 
-import gx1
-from gx1.stack import Stack, StackError
+import girax1
+from girax1.stack import Stack, StackError
 
 # Commands worth trying that take no parameters; unsupported ones answer with 102.
 EXTRA_COMMANDS = ['GetLicenses', 'GetDeviceInfo', 'GetProjectInfo', 'GetTrades',
@@ -45,10 +45,10 @@ def main() -> int:
                 print('\n=== command probe ===')
                 for command, result in probed.items():
                     print(f'  {command:<22} {result}')
-    except gx1.ConfigError as e:
+    except girax1.ConfigError as e:
         print(f'configuration error: {e}', file=sys.stderr)
         return 1
-    except gx1.X1Error as e:
+    except girax1.X1Error as e:
         print(f'error: {e}', file=sys.stderr)
         return 1
     return 0
@@ -72,7 +72,7 @@ def _probe(stack: Stack) -> dict[str, str]:
             results[command] = f'OK  keys={keys}'
         except StackError as e:
             results[command] = f'{e.text} ({e.code})'
-        except (TimeoutError, gx1.X1Error) as e:
+        except (TimeoutError, girax1.X1Error) as e:
             results[command] = str(e)
     return results
 

@@ -8,8 +8,8 @@ useful to find out whether a device is new enough to offer the REST API at all.
 import argparse
 import sys
 
-import gx1
-from gx1.portal import Portal
+import girax1
+from girax1.portal import Portal
 
 REST_API_FIRMWARE = (2, 4)
 
@@ -24,10 +24,10 @@ def main() -> int:
     try:
         with Portal(args.config, args.port) as portal:
             info = portal.device_info()
-    except gx1.ConfigError as e:
+    except girax1.ConfigError as e:
         print(f'configuration error: {e}', file=sys.stderr)
         return 1
-    except gx1.X1Error as e:
+    except girax1.X1Error as e:
         print(f'error: {e}', file=sys.stderr)
         return 1
 

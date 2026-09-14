@@ -7,7 +7,7 @@
 
 #include <unistd.h>
 
-namespace knx {
+namespace girax1 {
 
   namespace {
 
@@ -355,4 +355,4 @@ namespace knx {
     return std::optional<value_event>{};
   }
 
-} // namespace knx
+} // namespace girax1

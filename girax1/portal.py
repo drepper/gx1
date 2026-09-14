@@ -1,7 +1,7 @@
 """Client for the device portal of a Gira X1.
 
 The device portal is the configuration web interface of the device, served over
-plain HTTP, and is a different thing from the Gira IoT REST API in :mod:`gx1.x1`.
+plain HTTP, and is a different thing from the Gira IoT REST API in :mod:`girax1.x1`.
 It is reachable on firmware versions that do not offer the REST API yet, which
 makes it the only way to ask such a device about itself.
 

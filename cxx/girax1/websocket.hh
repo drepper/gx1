@@ -10,7 +10,7 @@
 
 #include "error.hh"
 
-namespace knx {
+namespace girax1 {
 
   // The frame types of RFC 6455 that this client has to deal with.
   enum class opcode : std::uint8_t {
@@ -24,7 +24,7 @@ namespace knx {
 
   // One message received from the peer.
   struct message {
-    knx::opcode kind = opcode::text;
+    girax1::opcode kind = opcode::text;
     std::string payload{};
   };
 
@@ -82,4 +82,4 @@ namespace knx {
   // Encode bytes as base64, which the handshake needs for its key.
   std::string base64(std::span<const std::uint8_t> data);
 
-} // namespace knx
+} // namespace girax1

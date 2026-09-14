@@ -12,7 +12,7 @@
 #include "timer.hh"
 #include "websocket.hh"
 
-namespace knx {
+namespace girax1 {
 
   // Brightness data points are scaled as a percentage.
   inline constexpr unsigned brightness_max = 100;
@@ -36,11 +36,11 @@ namespace knx {
   // A connection to the Device Stack API of a Gira X1.
   //
   // Every operation acts on a single device.  Turning a pattern into several
-  // devices is the job of knx::project::matching, which yields the paths a
+  // devices is the job of girax1::project::matching, which yields the paths a
   // caller then asks about one at a time.
   class stack {
   public:
-    explicit stack(knx::config settings) : config_(std::move(settings)) {}
+    explicit stack(girax1::config settings) : config_(std::move(settings)) {}
 
     // A live session cannot be shared.
     stack(const stack&) = delete("a device session cannot be copied");
@@ -58,7 +58,7 @@ namespace knx {
     result<Json::Value> request(std::string_view command, Json::Value parameters = {});
 
     // Return the configured functions with their data points.
-    result<knx::project> ui_configuration();
+    result<girax1::project> ui_configuration();
 
     // Return the current value of every data point, by data point id.
     result<std::map<unsigned, std::string>> process_view();
@@ -82,14 +82,14 @@ namespace knx {
     result<std::string> dim(unsigned point_id, unsigned percent);
 
     // Return the timer programming of one function timer channel.
-    result<knx::timer> read_timer(unsigned channel_id);
+    result<girax1::timer> read_timer(unsigned channel_id);
 
     // Change one switch time, sending only the fields that are present.
     result<void> set_switch_time(unsigned channel_id, unsigned index,
                                  const Json::Value& fields);
 
     // Add a switch time under a free index.  The weekday mask has to be in the
-    // encoding knx::write_days produces, and the trigger value has to name a
+    // encoding girax1::write_days produces, and the trigger value has to name a
     // scene that already exists.
     result<void> add_switch_time(unsigned channel_id, unsigned index,
                                  std::string_view time, std::string_view weekdays,
@@ -115,7 +115,7 @@ namespace knx {
     result<std::optional<value_event>> poll(std::chrono::milliseconds timeout);
 
     // Return the settings this session was made from.
-    const knx::config& settings() const noexcept { return config_; }
+    const girax1::config& settings() const noexcept { return config_; }
 
   private:
     // Read the next message, remembering events that arrive in between.
@@ -123,10 +123,10 @@ namespace knx {
     // Write one data point and return the value the device confirmed.
     result<std::string> write(unsigned point_id, const Json::Value& value);
 
-    knx::config config_;
-    knx::websocket socket_{};
+    girax1::config config_;
+    girax1::websocket socket_{};
     std::deque<value_event> events_{};
     unsigned query_id_ = 0;
   };
 
-} // namespace knx
+} // namespace girax1

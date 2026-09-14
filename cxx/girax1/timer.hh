@@ -11,7 +11,7 @@
 
 #include <json/json.h>
 
-namespace knx {
+namespace girax1 {
 
   // The weekday mask starts on Monday.  These English names are always
   // understood when parsing, whatever the locale says, so that a script keeps
@@ -89,7 +89,7 @@ namespace knx {
     std::string name{};
     std::string next_trigger{};
     std::vector<switch_time> switch_times{};
-    std::map<unsigned, knx::scene> scenes{};
+    std::map<unsigned, girax1::scene> scenes{};
 
     // Build a timer from the answer to GetConfiguration for its channel.
     static timer parse(const Json::Value& object);
@@ -98,7 +98,7 @@ namespace knx {
     bool programmed() const noexcept { return ! switch_times.empty(); }
 
     // Return the scene a switch time applies, or nullptr when it is unknown.
-    const knx::scene* scene_of(const switch_time& entry) const;
+    const girax1::scene* scene_of(const switch_time& entry) const;
 
     // Return the entry with the given index, or nullptr when there is none.
     const switch_time* entry(unsigned index) const;
@@ -107,4 +107,4 @@ namespace knx {
     unsigned free_index() const;
   };
 
-} // namespace knx
+} // namespace girax1

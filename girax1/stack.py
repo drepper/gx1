@@ -1,7 +1,7 @@
 """Client for the Gira Device Stack API.
 
 This is the WebSocket protocol the Gira Smart Home app uses.  Unlike the IoT
-REST API in :mod:`gx1.x1` it is available on firmware versions older than 2.4,
+REST API in :mod:`girax1.x1` it is available on firmware versions older than 2.4,
 which makes it the only way to control such a device.
 
 The protocol was derived from observed app traffic.  A client connects to::
@@ -161,7 +161,7 @@ class Stack:
         the active flag by sending nothing but that flag and the index.
 
         Note that ``weekdays`` has to be written in the encoding
-        :func:`gx1.timer.write_days` produces, which is not the one reading
+        :func:`girax1.timer.write_days` produces, which is not the one reading
         returns.
         """
         entry: dict[str, Any] = {'index': str(index), **fields}
@@ -172,7 +172,7 @@ class Stack:
                         trigger_value: int, active: bool = False) -> dict[str, Any]:
         """Add a switch time to a timer channel under a free index.
 
-        ``weekdays`` has to be in the encoding :func:`gx1.timer.write_days`
+        ``weekdays`` has to be in the encoding :func:`girax1.timer.write_days`
         produces.  ``trigger_value`` names a scene of the channel, which has to
         exist already; see :meth:`set_scene_set`.
         """

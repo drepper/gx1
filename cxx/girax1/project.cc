@@ -5,7 +5,7 @@
 #include <format>
 #include <fnmatch.h>
 
-namespace knx {
+namespace girax1 {
 
   namespace {
 
@@ -191,4 +191,4 @@ namespace knx {
         co_yield path(one);
   }
 
-} // namespace knx
+} // namespace girax1

@@ -5,8 +5,8 @@ import argparse
 import json
 import sys
 
-import gx1
-from gx1.stack import Stack
+import girax1
+from girax1.stack import Stack
 
 
 def main() -> int:
@@ -41,10 +41,10 @@ def main() -> int:
                     print(f"{reply.get('urn', args.point)} = {reply.get('value')}")
                 case 'watch':
                     _watch(stack, args.seconds)
-    except gx1.ConfigError as e:
+    except girax1.ConfigError as e:
         print(f'configuration error: {e}', file=sys.stderr)
         return 1
-    except gx1.X1Error as e:
+    except girax1.X1Error as e:
         print(f'error: {e}', file=sys.stderr)
         return 1
     except KeyboardInterrupt:

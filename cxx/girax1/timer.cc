@@ -6,7 +6,7 @@
 #include <chrono>
 #include <format>
 
-namespace knx {
+namespace girax1 {
 
   namespace {
 
@@ -182,7 +182,7 @@ namespace knx {
 
     if (const auto& set = object["sceneSet"]; set.isObject())
       for (const auto& one : set["scenes"]) {
-        knx::scene made{.number = number_of(one["number"]), .name = text_of(one["name"])};
+        girax1::scene made{.number = number_of(one["number"]), .name = text_of(one["name"])};
         for (const auto& point : one["datapoints"])
           made.actions.push_back({.point_id = number_of(point["id"]),
                                   .value = text_of(point["value"]),
@@ -194,4 +194,4 @@ namespace knx {
     return result;
   }
 
-} // namespace knx
+} // namespace girax1
