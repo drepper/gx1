@@ -26,6 +26,27 @@ WEEKDAYS = ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')
 # The only time type seen so far; others are passed through untranslated.
 POINT_IN_TIME = 'pointInTime'
 
+# Character marking a day on which a switch time does not act.
+DAY_OFF = '-'
+
+
+def read_days(mask: str) -> set[int]:
+    """Return the days of a weekday mask as it is read back from the device.
+
+    Reading gives a flag per day, as in ``11111--`` for Monday to Friday.
+    """
+    return {i for i, c in enumerate(mask[:len(WEEKDAYS)]) if c != DAY_OFF}
+
+
+def write_days(days: set[int]) -> str:
+    """Render days as a weekday mask the way the device expects it when writing.
+
+    Writing wants the number of the day itself at each position it applies to,
+    as in ``01234--`` for Monday to Friday.  That is not the encoding reading
+    returns, so the two directions must not be confused.
+    """
+    return ''.join(str(i) if i in days else DAY_OFF for i in range(len(WEEKDAYS)))
+
 
 @dataclass(frozen=True, slots=True)
 class SceneAction:
@@ -61,11 +82,16 @@ class SwitchTime:
     begin_date: str = ''
 
     @property
+    def day_numbers(self) -> set[int]:
+        """Return the days this entry acts on, counting Monday as zero."""
+        return read_days(self.weekdays)
+
+    @property
     def days(self) -> str:
         """Return the weekday mask as readable text such as ``Mon-Fri``."""
         if len(self.weekdays) != len(WEEKDAYS):
             return self.weekdays
-        active = [i for i, c in enumerate(self.weekdays) if c == '1']
+        active = sorted(self.day_numbers)
         if not active:
             return 'never'
         if len(active) == len(WEEKDAYS):

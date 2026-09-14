@@ -153,6 +153,21 @@ class Stack:
         """Return the timer programming of a function timer channel."""
         return Timer.parse(self.configuration(channel_id))
 
+    def set_switch_time(self, channel_id: int, index: int, **fields: Any) -> dict[str, Any]:
+        """Change one switch time of a timer channel.
+
+        Only the fields given are sent.  The device keeps everything else about
+        the entry as it was, which the Gira app relies on as well: it changes
+        the active flag by sending nothing but that flag and the index.
+
+        Note that ``weekdays`` has to be written in the encoding
+        :func:`gx1.timer.write_days` produces, which is not the one reading
+        returns.
+        """
+        entry: dict[str, Any] = {'index': str(index), **fields}
+        return self.request('SetConfiguration',
+                            object={'id': channel_id, 'timer': {'switchTimes': [entry]}})
+
     def in_group(self, group: str) -> bool:
         """Return whether the configured user belongs to the named group."""
         return str(self.request('CheckGroup', group=group).get('isInGroup')) == 'true'

@@ -27,6 +27,7 @@ from typing import Callable
 import gx1
 from gx1.project import WILDCARDS, Device, Project
 from gx1.stack import BRIGHTNESS_MAX, Stack
+from gx1.timer import WEEKDAYS, write_days
 
 DEFAULT_CONFIG = Path(os.environ.get('GX1_CONFIG', '~/.config/gx1.toml'))
 
@@ -97,6 +98,21 @@ def main() -> int:
                         help='also show validity and the scene behind every switch time')
     timers.set_defaults(run=command_timers)
 
+    setting = commands.add_parser('settime', help='change a programmed switch time')
+    setting.add_argument('path', metavar='PATH', help='the device whose timer to change')
+    setting.add_argument('index', type=int, metavar='INDEX',
+                         help='which switch time, as shown by the timers command')
+    setting.add_argument('time', nargs='?', metavar='TIME',
+                         help='new time of day as HH:MM or HH:MM:SS')
+    setting.add_argument('--days', metavar='DAYS',
+                         help='days to act on: daily, weekdays, weekend, or a list such as '
+                              'Mon,Wed or Mon-Fri')
+    setting.add_argument('--active', action=argparse.BooleanOptionalAction, default=None,
+                         help='switch the entry on or off without deleting it')
+    setting.add_argument('--scene', type=int, metavar='N',
+                         help='number of the scene to apply, as shown by timers --long')
+    setting.set_defaults(run=command_settime)
+
     commands.add_parser('gui', help='show the graphical user interface'
                         ).set_defaults(run=command_gui)
 
@@ -136,6 +152,96 @@ def command_switch(stack: Stack, project: Project, args: argparse.Namespace) -> 
             continue
         print(f'{project.path(device)} {_state(SWITCH_POINT, str(reply.get("value")))}')
     return 1 if failed else 0
+
+
+DAY_NAMES = {name.lower(): index for index, name in enumerate(WEEKDAYS)}
+DAY_GROUPS = {'daily': set(range(7)), 'everyday': set(range(7)),
+              'weekdays': {0, 1, 2, 3, 4}, 'weekend': {5, 6}}
+
+
+def _days(text: str) -> set[int]:
+    """Parse a days specification such as ``Mon-Fri``, ``Mon,Wed`` or ``weekend``."""
+    if (group := DAY_GROUPS.get(text.lower())) is not None:
+        return set(group)
+    days: set[int] = set()
+    for part in text.split(','):
+        first, sep, last = part.strip().partition('-')
+        try:
+            start = DAY_NAMES[first.strip().lower()]
+            stop = DAY_NAMES[last.strip().lower()] if sep else start
+        except KeyError:
+            raise argparse.ArgumentTypeError(
+                f'{part.strip()!r} is not a day; use names such as Mon or a range Mon-Fri') \
+                from None
+        days.update(range(start, stop + 1) if start <= stop
+                    else list(range(start, 7)) + list(range(0, stop + 1)))
+    return days
+
+
+def _time_of_day(text: str) -> str:
+    """Normalise a time of day to the HH:MM:SS the device stores."""
+    parts = text.split(':')
+    if not 2 <= len(parts) <= 3 or not all(p.isdigit() for p in parts):
+        raise argparse.ArgumentTypeError(f'{text!r} is not a time of day such as 06:30')
+    hour, minute = int(parts[0]), int(parts[1])
+    second = int(parts[2]) if len(parts) == 3 else 0
+    if not (0 <= hour < 24 and 0 <= minute < 60 and 0 <= second < 60):
+        raise argparse.ArgumentTypeError(f'{text!r} is not a valid time of day')
+    return f'{hour:02d}:{minute:02d}:{second:02d}'
+
+
+def command_settime(stack: Stack, project: Project, args: argparse.Namespace) -> int:
+    """Change one programmed switch time of one device."""
+    if args.time is None and args.days is None and args.active is None and args.scene is None:
+        print('nothing to change; give a time, --days, --active or --scene', file=sys.stderr)
+        return 1
+
+    matches = project.resolve(args.path)
+    if len(matches) != 1:
+        print(f'{args.path!r} matches {len(matches)} devices, name exactly one',
+              file=sys.stderr)
+        return 1
+    device = matches[0]
+    if not device.timer_channel:
+        print(f'{project.path(device)} has no timer channel', file=sys.stderr)
+        return 1
+
+    try:
+        timer = stack.timer(device.timer_channel)
+    except (gx1.X1Error, TimeoutError) as e:
+        print(f'{project.path(device)}: {e}', file=sys.stderr)
+        return 1
+    if not any(e.index == args.index for e in timer.switch_times):
+        available = ', '.join(str(e.index) for e in timer.switch_times) or 'none'
+        print(f'{project.path(device)} has no switch time {args.index}; '
+              f'programmed: {available}', file=sys.stderr)
+        return 1
+
+    fields: dict[str, object] = {}
+    if args.time is not None:
+        fields['time'] = _time_of_day(args.time)
+        fields['timeType'] = 'pointInTime'
+    if args.days is not None:
+        fields['weekdays'] = write_days(_days(args.days))
+        fields['recurrence'] = 'daily'
+    if args.active is not None:
+        fields['active'] = 'true' if args.active else 'false'
+    if args.scene is not None:
+        fields['triggerValue'] = str(args.scene)
+
+    try:
+        stack.set_switch_time(device.timer_channel, args.index, **fields)
+        timer = stack.timer(device.timer_channel)
+    except (gx1.X1Error, TimeoutError) as e:
+        print(f'{project.path(device)}: {e}', file=sys.stderr)
+        return 1
+
+    entry = next(e for e in timer.switch_times if e.index == args.index)
+    print(f'{project.path(device)}  {entry.index}  {entry.when}  {entry.days}  '
+          f'{"on" if entry.active else "off"}  {_scene(project, timer, entry)}')
+    if timer.next_trigger:
+        print(f'next {timer.next_trigger}')
+    return 0
 
 
 def command_gui(stack: Stack, project: Project, args: argparse.Namespace) -> int:
