@@ -1,0 +1,47 @@
+# Configuration for the Gira X1 client.
+#
+# Copy this file, fill in the values for your installation and keep the copy
+# outside of the repository (or rely on .gitignore, which excludes gx1.toml).
+#
+#     cp gx1.toml.example ~/.config/gx1.toml
+#     chmod 600 ~/.config/gx1.toml
+
+[device]
+# Host name or IP address of the X1 device.  Required.
+host = "192.168.1.2"
+
+# TCP port of the REST API.  When left out the default follows tls.enabled
+# below: 443 with TLS, 80 without.
+# port = 80
+
+# Timeout in seconds for a single request.
+timeout = 10.0
+
+[auth]
+# Credentials of a user configured in the X1 (the same ones the Gira Smart
+# Home app uses).  Required unless a token is given below.
+username = "USERNAME"
+password = "PASSWORD"
+
+# Identifier this program registers itself with at the device.  It shows up in
+# the list of registered clients in the X1 and should use a reverse-DNS name.
+client_id = "org.akkadia.gx1"
+
+# A token obtained from an earlier registration.  When set, the client skips
+# the registration step and uses this token instead of username/password.
+# token = "..."
+
+[tls]
+# Set to false when the device serves the API over plain HTTP.  Note that the
+# credentials above are then sent unencrypted, so only do this on a network you
+# trust.
+enabled = false
+
+# The following two only matter while enabled is true.
+#
+# X1 devices ship with a self-signed certificate.  Set verify to false to accept
+# it without checking, or point ca_cert at the exported device certificate to
+# keep verification enabled.
+verify = false
+
+# ca_cert = "~/.config/gx1-device.pem"

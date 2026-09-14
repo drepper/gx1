@@ -1,0 +1,11 @@
+# The real configuration file holds credentials and must never be committed.
+gx1.toml
+*.pem
+
+.claude/settings.local.json*
+
+__pycache__/
+*.py[cod]
+.venv/
+*.log
+proxy-cert.pem
