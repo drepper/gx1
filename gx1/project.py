@@ -7,10 +7,17 @@ into objects that are pleasant to work with.
 """
 
 from dataclasses import dataclass, field
+from fnmatch import fnmatch
 from typing import Any, Iterator, Self
 
 # Nodes of the Root tree that group functions together.
 GROUPING_TYPES = ('Trade', 'Location', 'Zone', 'Profile')
+
+# The grouping that names the room a device sits in.
+ROOM_KIND = 'Location'
+
+# Characters that turn a device path into a pattern.
+WILDCARDS = '*?['
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +86,8 @@ class Project:
     devices: dict[int, Device] = field(default_factory=dict)
     groups: list[Group] = field(default_factory=list)
     guid: str = ''
+    rooms: dict[int, str] = field(default_factory=dict)
+    device_paths: dict[int, str] = field(default_factory=dict)
 
     @classmethod
     def parse(cls, configuration: list[dict[str, Any]]) -> Self:
@@ -92,7 +101,24 @@ class Project:
             elif entry.get('channelViewID') is not None and entry.get('name'):
                 device = _device(entry)
                 project.devices[device.view_id] = device
+        project._index()
         return project
+
+    def _index(self) -> None:
+        """Work out the room of every device and give each one a unique path."""
+        for group in self.groups:
+            if group.kind == ROOM_KIND:
+                for member in group.members:
+                    self.rooms.setdefault(member, group.name)
+
+        # A path only needs the id appended when two devices would share it.
+        taken: dict[str, list[int]] = {}
+        for view_id, device in self.devices.items():
+            room = self.rooms.get(view_id)
+            taken.setdefault(f'{room}/{device.name}' if room else device.name, []).append(view_id)
+        for path, owners in taken.items():
+            for view_id in owners:
+                self.device_paths[view_id] = path if len(owners) == 1 else f'{path}#{view_id}'
 
     def __iter__(self) -> Iterator[Device]:
         """Iterate over the devices in configuration order."""
@@ -105,6 +131,33 @@ class Project:
     def find(self, name: str) -> Device | None:
         """Return the device with the given name, compared case insensitively."""
         return next((d for d in self.devices.values() if d.name.lower() == name.lower()), None)
+
+    def path(self, device: Device) -> str:
+        """Return the ``room/name`` path identifying a device."""
+        return self.device_paths.get(device.view_id, device.name)
+
+    def paths(self) -> dict[str, Device]:
+        """Return every device by its path."""
+        return {self.path(d): d for d in self.devices.values()}
+
+    def resolve(self, pattern: str) -> list[Device]:
+        """Return the devices a path, a bare name, a room or a pattern selects.
+
+        Recognised, in this order: the exact path, a pattern containing a
+        wildcard, a room given with a trailing slash, and finally a bare device
+        name.  All comparisons ignore case.
+        """
+        paths = self.paths()
+        wanted = pattern.lower()
+
+        for path, device in paths.items():
+            if path.lower() == wanted:
+                return [device]
+        if any(c in pattern for c in WILDCARDS):
+            return [d for p, d in paths.items() if fnmatch(p.lower(), wanted)]
+        if pattern.endswith('/'):
+            return [d for p, d in paths.items() if p.lower().startswith(wanted)]
+        return [d for d in self.devices.values() if d.name.lower() == wanted]
 
     def groupings(self) -> dict[str, list[Group]]:
         """Return the non-empty groups by kind, for example ``Trade`` or ``Location``."""

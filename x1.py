@@ -5,8 +5,14 @@ The first argument is the command to carry out.  The project configuration,
 which holds the names of all devices, is downloaded from the X1 at start-up so
 that every command can address devices by name.
 
-    x1.py list                  list all devices and the available groupings
-    x1.py list --by location    list the devices grouped by location
+Devices are addressed by a path made of the room they sit in, a slash and the
+device name, for example ``Flur/Deckenlampen Flur``.
+
+    x1.py list                      list all devices and the available groupings
+    x1.py list --by location        list the devices grouped by location
+    x1.py status                    show the status of every device
+    x1.py status "Küche/"           show the status of one room
+    x1.py status "*/Rollo*"         show the status of everything matching
 """
 
 import argparse
@@ -41,11 +47,20 @@ def main() -> int:
                          help='also show the data points of every device')
     listing.set_defaults(run=command_list)
 
+    status = commands.add_parser('status', help='print the current status of devices')
+    status.add_argument('paths', nargs='*', metavar='PATH',
+                        help='device paths such as "Flur/Deckenlampen Flur"; a bare device '
+                             'name, a room with a trailing slash such as "Küche/", or a '
+                             'pattern such as "*/Rollo*" also work.  All devices when omitted')
+    status.set_defaults(run=command_status)
+
     args = parser.parse_args()
 
     try:
         with Stack(args.config) as stack:
             project = Project.parse(stack.ui_configuration())
+            run: Callable[[Stack, Project, argparse.Namespace], int] = args.run
+            return run(stack, project, args)
     except gx1.ConfigError as e:
         print(f'configuration error: {e}', file=sys.stderr)
         return 1
@@ -56,11 +71,43 @@ def main() -> int:
         print('error: the device did not answer in time', file=sys.stderr)
         return 1
 
-    run: Callable[[Project, argparse.Namespace], int] = args.run
-    return run(project, args)
+
+def command_status(stack: Stack, project: Project, args: argparse.Namespace) -> int:
+    """Print the current value of every data point of the selected devices."""
+    if args.paths:
+        devices: list[Device] = []
+        missing = False
+        for pattern in args.paths:
+            found = project.resolve(pattern)
+            if not found:
+                print(f'no device matches {pattern!r}', file=sys.stderr)
+                missing = True
+            devices += (d for d in found if d not in devices)
+    else:
+        devices = list(project)
+        missing = False
+
+    values = {str(d.get('id')): d.get('state') for d in stack.process_view()}
+    width = max((len(project.path(d)) for d in devices), default=0)
+    for device in devices:
+        states = ', '.join(f'{p.name} {_state(p.name, values.get(str(p.point_id)))}'
+                           for p in device.usable_points)
+        print(f'{project.path(device):<{width}}  {device.kind:<9} {states or "no data points"}')
+    return 1 if missing else 0
 
 
-def command_list(project: Project, args: argparse.Namespace) -> int:
+def _state(name: str, value: str | None) -> str:
+    """Render one data point value the way a person would read it."""
+    if value is None or value == '':
+        return '?'
+    if name == 'OnOff':
+        return {'0': 'off', '1': 'on'}.get(value, value)
+    if name == 'Brightness':
+        return f'{value}%'
+    return value
+
+
+def command_list(stack: Stack, project: Project, args: argparse.Namespace) -> int:
     """List the devices, either flat or grouped as requested."""
     groupings = project.groupings()
     if args.grouping is None:
