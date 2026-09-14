@@ -97,6 +97,9 @@ def main() -> int:
                         help='also show validity and the scene behind every switch time')
     timers.set_defaults(run=command_timers)
 
+    commands.add_parser('gui', help='show the graphical user interface'
+                        ).set_defaults(run=command_gui)
+
     args = parser.parse_args()
 
     try:
@@ -133,6 +136,20 @@ def command_switch(stack: Stack, project: Project, args: argparse.Namespace) -> 
             continue
         print(f'{project.path(device)} {_state(SWITCH_POINT, str(reply.get("value")))}')
     return 1 if failed else 0
+
+
+def command_gui(stack: Stack, project: Project, args: argparse.Namespace) -> int:
+    """Show the graphical user interface.
+
+    Tk is imported only here so that the command line commands keep working on
+    a machine where it is not installed.
+    """
+    try:
+        from gx1 import gui
+    except ImportError as e:
+        print(f'the graphical interface needs Tk: {e}', file=sys.stderr)
+        return 1
+    return gui.run(stack, project)
 
 
 def command_timers(stack: Stack, project: Project, args: argparse.Namespace) -> int:
