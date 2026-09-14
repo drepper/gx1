@@ -1,7 +1,6 @@
 #include "websocket.hh"
 
 #include <array>
-#include <bit>
 #include <cerrno>
 #include <cstring>
 #include <format>
@@ -10,15 +9,14 @@
 
 #include <netdb.h>
 #include <poll.h>
-#include <sys/socket.h>
 #include <unistd.h>
+#include <sys/socket.h>
 
 namespace knx {
 
   namespace {
 
-    constexpr std::string_view base64_alphabet =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    constexpr std::string_view base64_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
     // Return random bytes for a mask or a handshake key.
     template<std::size_t N>
@@ -61,12 +59,7 @@ namespace knx {
     close();
   }
 
-  websocket::websocket(websocket&& other) noexcept
-    : fd_(std::exchange(other.fd_, -1)),
-      session_(std::exchange(other.session_, nullptr)),
-      credentials_(std::exchange(other.credentials_, nullptr)),
-      buffer_(std::move(other.buffer_)),
-      closed_(std::exchange(other.closed_, true))
+  websocket::websocket(websocket&& other) noexcept : fd_(std::exchange(other.fd_, -1)), session_(std::exchange(other.session_, nullptr)), credentials_(std::exchange(other.credentials_, nullptr)), buffer_(std::move(other.buffer_)), closed_(std::exchange(other.closed_, true))
   {
   }
 
@@ -102,7 +95,7 @@ namespace knx {
 
   void websocket::close()
   {
-    if (fd_ >= 0 && !closed_) {
+    if (fd_ >= 0 && ! closed_) {
       // 1000 is the normal closure status of RFC 6455.
       const std::array<char, 2> status{'\x03', '\xe8'};
       static_cast<void>(send(std::string_view(status.data(), status.size()), opcode::close));
@@ -110,10 +103,7 @@ namespace knx {
     discard();
   }
 
-  result<void> websocket::connect(const std::string& host, unsigned port,
-                                  const std::string& path,
-                                  std::chrono::milliseconds timeout, bool verify,
-                                  const std::string& ca_cert)
+  result<void> websocket::connect(const std::string& host, unsigned port, const std::string& path, std::chrono::milliseconds timeout, bool verify, const std::string& ca_cert)
   {
     const auto service = std::format("{}", port);
     ::addrinfo hints{};
@@ -121,8 +111,7 @@ namespace knx {
     hints.ai_socktype = SOCK_STREAM;
 
     ::addrinfo* found = nullptr;
-    if (const int rc = ::getaddrinfo(host.c_str(), service.c_str(), &hints, &found);
-        rc != 0) [[unlikely]]
+    if (const int rc = ::getaddrinfo(host.c_str(), service.c_str(), &hints, &found); rc != 0) [[unlikely]]
       return fail(std::format("cannot resolve {}: {}", host, ::gai_strerror(rc)));
 
     for (::addrinfo* candidate = found; candidate != nullptr; candidate = candidate->ai_next) {
@@ -142,9 +131,8 @@ namespace knx {
       discard();
       return fail("cannot allocate TLS credentials");
     }
-    if (!ca_cert.empty())
-      ::gnutls_certificate_set_x509_trust_file(credentials_, ca_cert.c_str(),
-                                               GNUTLS_X509_FMT_PEM);
+    if (! ca_cert.empty())
+      ::gnutls_certificate_set_x509_trust_file(credentials_, ca_cert.c_str(), GNUTLS_X509_FMT_PEM);
     else if (verify)
       ::gnutls_certificate_set_x509_system_trust(credentials_);
 
@@ -171,21 +159,22 @@ namespace knx {
     }
 
     closed_ = false;
-    if (auto upgraded = upgrade(host, port, path); !upgraded) [[unlikely]] {
+    if (auto upgraded = upgrade(host, port, path); ! upgraded) [[unlikely]] {
       discard();
       return upgraded;
     }
     return {};
   }
 
-  result<void> websocket::upgrade(const std::string& host, unsigned port,
-                                  const std::string& path)
+  result<void> websocket::upgrade(const std::string& host, unsigned port, const std::string& path)
   {
     const auto key = base64(random_bytes<16>());
-    const auto request = std::format("GET {} HTTP/1.1\r\nHost: {}:{}\r\n"
-                                     "Upgrade: websocket\r\nConnection: Upgrade\r\n"
-                                     "Sec-WebSocket-Key: {}\r\nSec-WebSocket-Version: 13\r\n\r\n",
-                                     path, host, port, key);
+    const auto request = std::format(
+        "GET {} HTTP/1.1\r\nHost: {}:{}\r\n"
+        "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+        "Sec-WebSocket-Key: {}\r\nSec-WebSocket-Version: 13\r\n\r\n",
+        path, host, port, key
+    );
     if (::gnutls_record_send(session_, request.data(), request.size()) < 0) [[unlikely]]
       return fail("cannot send the upgrade request");
 
@@ -232,8 +221,7 @@ namespace knx {
       frame += static_cast<char>(payload[i] ^ mask[i % 4]);
 
     for (std::size_t sent = 0; sent < frame.size();) {
-      const auto wrote = ::gnutls_record_send(session_, frame.data() + sent,
-                                              frame.size() - sent);
+      const auto wrote = ::gnutls_record_send(session_, frame.data() + sent, frame.size() - sent);
       if (wrote < 0) [[unlikely]]
         return fail(std::format("cannot send: {}", ::gnutls_strerror(static_cast<int>(wrote))));
       sent += static_cast<std::size_t>(wrote);
@@ -245,7 +233,7 @@ namespace knx {
   {
     // Bytes already decrypted by the TLS layer will not show up in poll, so
     // they have to be taken first.
-    if (::gnutls_record_check_pending(session_) == 0 && !readable(fd_, timeout))
+    if (::gnutls_record_check_pending(session_) == 0 && ! readable(fd_, timeout))
       return false;
 
     std::array<char, 16384> chunk{};
@@ -258,8 +246,7 @@ namespace knx {
       if (::gnutls_error_is_fatal(static_cast<int>(got)) == 0)
         return false;
       closed_ = true;
-      return fail(std::format("cannot receive: {}",
-                              ::gnutls_strerror(static_cast<int>(got))));
+      return fail(std::format("cannot receive: {}", ::gnutls_strerror(static_cast<int>(got))));
     }
     buffer_.append(chunk.data(), static_cast<std::size_t>(got));
     return true;
@@ -291,7 +278,7 @@ namespace knx {
 
     std::array<std::uint8_t, 4> mask{};
     const bool masked = (byte(1) & 0x80) != 0;
-    if (masked) {                       // A server must not mask, but be lenient.
+    if (masked) { // A server must not mask, but be lenient.
       if (buffer_.size() < offset + 4)
         return std::nullopt;
       for (std::size_t i = 0; i < 4; ++i)
@@ -317,18 +304,18 @@ namespace knx {
 
     for (;;) {
       auto frame = next_frame();
-      if (!frame) {
+      if (! frame) {
         auto more = fill(timeout);
-        if (!more) [[unlikely]]
+        if (! more) [[unlikely]]
           return std::unexpected(more.error());
-        if (!*more)
+        if (! *more)
           return std::optional<message>{};
         continue;
       }
 
       auto [fin, kind, payload] = std::move(*frame);
       if (kind == opcode::ping) {
-        if (auto sent = send(payload, opcode::pong); !sent) [[unlikely]]
+        if (auto sent = send(payload, opcode::pong); ! sent) [[unlikely]]
           return std::unexpected(sent.error());
         continue;
       }

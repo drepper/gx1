@@ -1,7 +1,6 @@
 #pragma once
 
 #include <array>
-#include <cstdint>
 #include <locale>
 #include <map>
 #include <optional>
@@ -17,10 +16,8 @@ namespace knx {
   // The weekday mask starts on Monday.  These English names are always
   // understood when parsing, whatever the locale says, so that a script keeps
   // working wherever it is run.
-  inline constexpr std::array<std::string_view, 7> weekday_names{
-    "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
-  inline constexpr std::array<std::string_view, 7> weekday_full_names{
-    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"};
+  inline constexpr std::array<std::string_view, 7> weekday_names{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
+  inline constexpr std::array<std::string_view, 7> weekday_full_names{"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"};
 
   // Return the abbreviated name of a day, Monday being zero, as the locale
   // spells it.  Printing always uses the abbreviated form.
@@ -31,8 +28,7 @@ namespace knx {
   // Both the abbreviated and the full form are recognised, in the spelling of
   // the locale as well as in English.  Comparison ignores case and a trailing
   // full stop, which some locales append to the abbreviated form.
-  std::optional<unsigned> weekday_number(std::string_view name,
-                                         const std::locale& with = std::locale());
+  std::optional<unsigned> weekday_number(std::string_view name, const std::locale& with = std::locale());
 
   // Character marking a day a switch time does not act on.
   inline constexpr char day_off = '-';
@@ -99,7 +95,7 @@ namespace knx {
     static timer parse(const Json::Value& object);
 
     // Return whether any switch time is configured at all.
-    bool programmed() const noexcept { return !switch_times.empty(); }
+    bool programmed() const noexcept { return ! switch_times.empty(); }
 
     // Return the scene a switch time applies, or nullptr when it is unknown.
     const knx::scene* scene_of(const switch_time& entry) const;
