@@ -211,14 +211,16 @@ def _percent(text: str) -> int:
 
 
 def command_dim(stack: Stack, project: Project, args: argparse.Namespace) -> int:
-    """Set the brightness of every named light."""
+    """Set the brightness of every named light.
+
+    Devices without a brightness are passed over in silence, so that naming a
+    whole room does not produce a complaint about every switch and covering in
+    it.
+    """
     devices, failed = _select(project, args.paths)
     for device in devices:
         point = device.point(BRIGHTNESS_POINT)
         if point is None or not point.usable:
-            print(f'{project.path(device)}: no {BRIGHTNESS_POINT} data point, '
-                  f'a {device.kind} cannot be dimmed', file=sys.stderr)
-            failed = True
             continue
         try:
             reply = stack.dim(point.point_id, args.level)
