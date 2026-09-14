@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <cstring>
 #include <format>
+#include <memory>
 #include <random>
 #include <utility>
 
@@ -15,8 +16,6 @@
 namespace girax1 {
 
   namespace {
-
-    constexpr std::string_view base64_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
     // Return random bytes for a mask or a handshake key.
     template<std::size_t N>
@@ -41,17 +40,19 @@ namespace girax1 {
 
   std::string base64(std::span<const std::uint8_t> data)
   {
-    std::string out;
-    out.reserve((data.size() + 2) / 3 * 4);
-    for (std::size_t i = 0; i < data.size(); i += 3) {
-      const unsigned remaining = static_cast<unsigned>(std::min<std::size_t>(3, data.size() - i));
-      unsigned group = 0;
-      for (unsigned j = 0; j < 3; ++j)
-        group = (group << 8) | (j < remaining ? data[i + j] : 0u);
-      for (unsigned j = 0; j < 4; ++j)
-        out += j <= remaining ? base64_alphabet[(group >> (18 - 6 * j)) & 0x3f] : '=';
-    }
-    return out;
+    // GnuTLS allocates the answer and hands ownership over, so it is released
+    // again on the way out however this function is left.
+    const ::gnutls_datum_t source{.data = const_cast<unsigned char*>(data.data()),
+                                  .size = static_cast<unsigned>(data.size())};
+    ::gnutls_datum_t encoded{};
+    if (::gnutls_base64_encode2(&source, &encoded) < 0) [[unlikely]]
+      return {};
+
+    // gnutls_free is a pointer to a function and additionally a macro, so it
+    // has to be called rather than named as a deleter.
+    const auto release = [](unsigned char* buffer) { ::gnutls_free(buffer); };
+    const std::unique_ptr<unsigned char, decltype(release)> owned(encoded.data, release);
+    return {reinterpret_cast<const char*>(encoded.data), encoded.size};
   }
 
   websocket::~websocket()
