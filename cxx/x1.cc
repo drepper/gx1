@@ -14,8 +14,8 @@
 #include <algorithm>
 #include <charconv>
 #include <cstdlib>
-#include <locale>
 #include <format>
+#include <locale>
 #include <map>
 #include <print>
 #include <ranges>
@@ -87,8 +87,7 @@ namespace {
   {
     unsigned value = 0;
     const auto* end = text.data() + text.size();
-    if (auto [ptr, ec] = std::from_chars(text.data(), end, value);
-        ec != std::errc{} || ptr != end)
+    if (auto [ptr, ec] = std::from_chars(text.data(), end, value); ec != std::errc{} || ptr != end)
       return std::nullopt;
     return value;
   }
@@ -105,7 +104,7 @@ namespace {
     const auto hour = as_number(parts[0]);
     const auto minute = as_number(parts[1]);
     const auto second = parts.size() == 3 ? as_number(parts[2]) : std::optional<unsigned>{0};
-    if (!hour || !minute || !second) [[unlikely]]
+    if (! hour || ! minute || ! second) [[unlikely]]
       return std::nullopt;
     if (*hour > 23 || *minute > 59 || *second > 59) [[unlikely]]
       return std::nullopt;
@@ -115,13 +114,10 @@ namespace {
   // Parse a days specification such as "Mon-Fri", "Mon,Wed" or "weekend".
   std::optional<std::set<unsigned>> parse_days(std::string_view text)
   {
-    static const std::map<std::string_view, std::set<unsigned>> groups{
-      {"daily", {0, 1, 2, 3, 4, 5, 6}}, {"everyday", {0, 1, 2, 3, 4, 5, 6}},
-      {"weekdays", {0, 1, 2, 3, 4}}, {"weekend", {5, 6}}};
+    static const std::map<std::string_view, std::set<unsigned>> groups{{"daily", {0, 1, 2, 3, 4, 5, 6}}, {"everyday", {0, 1, 2, 3, 4, 5, 6}}, {"weekdays", {0, 1, 2, 3, 4}}, {"weekend", {5, 6}}};
 
     std::string lowered(text);
-    std::ranges::transform(lowered, lowered.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    std::ranges::transform(lowered, lowered.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     if (const auto found = groups.find(lowered); found != groups.end())
       return found->second;
 
@@ -129,11 +125,9 @@ namespace {
     for (const auto piece : std::views::split(text, ',')) {
       const std::string_view part(piece.begin(), piece.end());
       const auto dash = part.find('-');
-      const auto first = girax1::weekday_number(dash == std::string_view::npos
-                                             ? part : part.substr(0, dash));
-      const auto last = dash == std::string_view::npos
-        ? first : girax1::weekday_number(part.substr(dash + 1));
-      if (!first || !last) [[unlikely]]
+      const auto first = girax1::weekday_number(dash == std::string_view::npos ? part : part.substr(0, dash));
+      const auto last = dash == std::string_view::npos ? first : girax1::weekday_number(part.substr(dash + 1));
+      if (! first || ! last) [[unlikely]]
         return std::nullopt;
       for (unsigned day = *first;; day = (day + 1) % girax1::weekday_names.size()) {
         days.insert(day);
@@ -154,8 +148,7 @@ namespace {
   //
   // This is where the single device interface of the library is turned into
   // work on many: the generator yields paths, and each is looked up on its own.
-  std::pair<std::vector<const girax1::device*>, bool>
-  select(const girax1::project& plan, std::span<const std::string> patterns)
+  std::pair<std::vector<const girax1::device*>, bool> select(const girax1::project& plan, std::span<const std::string> patterns)
   {
     std::vector<const girax1::device*> found;
     bool failed = false;
@@ -163,11 +156,10 @@ namespace {
       bool any = false;
       for (const auto& path : plan.matching(pattern)) {
         any = true;
-        if (const auto* one = plan.find(path);
-            one != nullptr && !std::ranges::contains(found, one))
+        if (const auto* one = plan.find(path); one != nullptr && ! std::ranges::contains(found, one))
           found.push_back(one);
       }
-      if (!any) [[unlikely]] {
+      if (! any) [[unlikely]] {
         complain("no device matches '{}'", pattern);
         failed = true;
       }
@@ -176,8 +168,7 @@ namespace {
   }
 
   // Return the devices that were named on their own rather than swept up.
-  std::set<unsigned> named_alone(const girax1::project& plan,
-                                 std::span<const std::string> patterns)
+  std::set<unsigned> named_alone(const girax1::project& plan, std::span<const std::string> patterns)
   {
     std::set<unsigned> named;
     for (const auto& pattern : patterns) {
@@ -205,19 +196,17 @@ namespace {
   }
 
   // Describe what a switch time does, resolved through its scene.
-  std::string scene_text(const girax1::project& plan, const girax1::timer& programming,
-                         const girax1::switch_time& entry)
+  std::string scene_text(const girax1::project& plan, const girax1::timer& programming, const girax1::switch_time& entry)
   {
     const auto* found = programming.scene_of(entry);
     if (found == nullptr)
       return std::format("scene {}", entry.trigger_value);
     std::string text;
     for (const auto& action : found->actions) {
-      if (!text.empty())
+      if (! text.empty())
         text += ", ";
       const auto name = plan.point_kind(action.point_id);
-      text += std::format("{} {}", name.empty() ? std::format("{}", action.point_id) : name,
-                          readable(name, action.value));
+      text += std::format("{} {}", name.empty() ? std::format("{}", action.point_id) : name, readable(name, action.value));
     }
     return text.empty() ? std::format("scene {} '{}'", found->number, found->name) : text;
   }
@@ -241,7 +230,7 @@ namespace {
 
     const auto show = [&](const girax1::device& one, std::string_view indent) {
       std::println("{}{:<28} {:<10} id={}", indent, one.name, one.kind(), one.view_id);
-      if (!detailed)
+      if (! detailed)
         return;
       for (const auto& point : one.data_points)
         if (point.usable())
@@ -252,8 +241,7 @@ namespace {
 
     const auto groupings = use.plan.groupings();
     if (wanted.empty()) {
-      std::println("{} device{}", use.plan.devices().size(),
-                   use.plan.devices().size() == 1 ? "" : "s");
+      std::println("{} device{}", use.plan.devices().size(), use.plan.devices().size() == 1 ? "" : "s");
       for (const auto& one : use.plan.devices())
         show(one, "   ");
       std::println("");
@@ -265,21 +253,17 @@ namespace {
       for (const auto& [kind, groups] : groupings) {
         std::println("   --by {}", kind);
         for (const auto& one : groups)
-          std::println("      {:<28} {} device{}", one.label(), one.members.size(),
-                       one.members.size() == 1 ? "" : "s");
+          std::println("      {:<28} {} device{}", one.label(), one.members.size(), one.members.size() == 1 ? "" : "s");
       }
       return 0;
     }
 
     for (const auto& [kind, groups] : groupings) {
-      if (!std::ranges::equal(kind, wanted, {},
-                              [](unsigned char c) { return std::tolower(c); },
-                              [](unsigned char c) { return std::tolower(c); }))
+      if (! std::ranges::equal(kind, wanted, {}, [](unsigned char c) { return std::tolower(c); }, [](unsigned char c) { return std::tolower(c); }))
         continue;
       for (const auto& one : groups) {
         const auto members = use.plan.members(one);
-        std::println("{}  ({} device{})", one.label(), members.size(),
-                     members.size() == 1 ? "" : "s");
+        std::println("{}  ({} device{})", one.label(), members.size(), members.size() == 1 ? "" : "s");
         for (const auto* member : members)
           show(*member, "   ");
         std::println("");
@@ -292,15 +276,13 @@ namespace {
 
   int command_status(session use, std::span<const std::string> arguments)
   {
-    auto [devices, failed] = arguments.empty()
-      ? std::pair{std::vector<const girax1::device*>{}, false}
-      : select(use.plan, arguments);
+    auto [devices, failed] = arguments.empty() ? std::pair{std::vector<const girax1::device*>{}, false} : select(use.plan, arguments);
     if (arguments.empty())
       for (const auto& one : use.plan.devices())
         devices.push_back(&one);
 
     auto values = use.device.process_view();
-    if (!values) [[unlikely]] {
+    if (! values) [[unlikely]] {
       complain("{}", values.error().message);
       return 1;
     }
@@ -312,24 +294,20 @@ namespace {
     for (const auto* one : devices) {
       std::string parts;
       for (const auto& point : one->data_points) {
-        if (!point.usable())
+        if (! point.usable())
           continue;
         const auto found = values->find(point.point_id);
-        if (!parts.empty())
+        if (! parts.empty())
           parts += ", ";
-        parts += std::format("{} {}", point.name,
-                             readable(point.name,
-                                      found == values->end() ? std::string{} : found->second));
+        parts += std::format("{} {}", point.name, readable(point.name, found == values->end() ? std::string{} : found->second));
       }
-      std::println("{}  {:<9} {}", padded(use.plan.path(*one), width), one->kind(),
-                   parts.empty() ? "no data points" : parts);
+      std::println("{}  {:<9} {}", padded(use.plan.path(*one), width), one->kind(), parts.empty() ? "no data points" : parts);
     }
     return failed ? 1 : 0;
   }
 
   // Drive one data point of every selected device, reporting what happened.
-  int drive(session use, std::span<const std::string> arguments, std::string_view point_name,
-            auto&& action, std::string_view refusal, bool quiet_when_swept = false)
+  int drive(session use, std::span<const std::string> arguments, std::string_view point_name, auto&& action, std::string_view refusal, bool quiet_when_swept = false)
   {
     if (arguments.empty()) [[unlikely]] {
       complain("at least one device has to be named");
@@ -340,16 +318,15 @@ namespace {
 
     for (const auto* one : devices) {
       const auto* point = one->point(point_name);
-      if (point == nullptr || !point->usable()) {
-        if (!quiet_when_swept || named.contains(one->view_id)) {
-          complain("{}: no {} data point, a {} {}", use.plan.path(*one), point_name,
-                   one->kind(), refusal);
+      if (point == nullptr || ! point->usable()) {
+        if (! quiet_when_swept || named.contains(one->view_id)) {
+          complain("{}: no {} data point, a {} {}", use.plan.path(*one), point_name, one->kind(), refusal);
           failed = true;
         }
         continue;
       }
       auto done = action(point->point_id);
-      if (!done) [[unlikely]] {
+      if (! done) [[unlikely]] {
         complain("{}: {}", use.plan.path(*one), done.error().message);
         failed = true;
         continue;
@@ -361,20 +338,14 @@ namespace {
 
   int command_switch(session use, std::span<const std::string> arguments, bool on)
   {
-    return drive(use, arguments, switch_point,
-                 [&](unsigned id) { return use.device.switch_to(id, on); },
-                 "cannot be switched this way");
+    return drive(use, arguments, switch_point, [&](unsigned id) { return use.device.switch_to(id, on); }, "cannot be switched this way");
   }
 
-  int command_cover(session use, std::span<const std::string> arguments,
-                    std::string_view action)
+  int command_cover(session use, std::span<const std::string> arguments, std::string_view action)
   {
     if (action == "stop")
-      return drive(use, arguments, stop_point,
-                   [&](unsigned id) { return use.device.stop(id); }, "cannot be moved");
-    return drive(use, arguments, cover_point,
-                 [&](unsigned id) { return use.device.move(id, action == "down"); },
-                 "cannot be moved");
+      return drive(use, arguments, stop_point, [&](unsigned id) { return use.device.stop(id); }, "cannot be moved");
+    return drive(use, arguments, cover_point, [&](unsigned id) { return use.device.move(id, action == "down"); }, "cannot be moved");
   }
 
   int command_dim(session use, std::span<const std::string> arguments)
@@ -384,14 +355,12 @@ namespace {
       return 1;
     }
     const auto percent = as_number(arguments[0]);
-    if (!percent || *percent > girax1::brightness_max) [[unlikely]] {
+    if (! percent || *percent > girax1::brightness_max) [[unlikely]] {
       complain("dim: brightness has to be between 0 and {}", girax1::brightness_max);
       return 1;
     }
     // Devices without a brightness are passed over unless named on their own.
-    return drive(use, arguments.subspan(1), brightness_point,
-                 [&](unsigned id) { return use.device.dim(id, *percent); },
-                 "cannot be dimmed", true);
+    return drive(use, arguments.subspan(1), brightness_point, [&](unsigned id) { return use.device.dim(id, *percent); }, "cannot be dimmed", true);
   }
 
   int command_timers(session use, std::span<const std::string> arguments)
@@ -408,35 +377,29 @@ namespace {
         patterns.push_back(argument);
     }
 
-    auto [devices, failed] = patterns.empty()
-      ? std::pair{std::vector<const girax1::device*>{}, false}
-      : select(use.plan, patterns);
+    auto [devices, failed] = patterns.empty() ? std::pair{std::vector<const girax1::device*>{}, false} : select(use.plan, patterns);
     if (patterns.empty())
       for (const auto& one : use.plan.devices())
         devices.push_back(&one);
 
     std::size_t shown = 0;
     for (const auto* one : devices) {
-      if (one->timer_channel == 0 || (one->programmed_slots == 0 && !all))
+      if (one->timer_channel == 0 || (one->programmed_slots == 0 && ! all))
         continue;
       auto programming = use.device.read_timer(one->timer_channel);
-      if (!programming) [[unlikely]] {
+      if (! programming) [[unlikely]] {
         complain("{}: {}", use.plan.path(*one), programming.error().message);
         failed = true;
         continue;
       }
       ++shown;
-      std::println("{}   [{}]   {}", use.plan.path(*one), one->kind(),
-                   programming->next_trigger.empty()
-                     ? "nothing due" : std::format("next {}", programming->next_trigger));
+      std::println("{}   [{}]   {}", use.plan.path(*one), one->kind(), programming->next_trigger.empty() ? "nothing due" : std::format("next {}", programming->next_trigger));
       if (programming->switch_times.empty())
         std::println("   no switch times programmed");
       for (const auto& entry : programming->switch_times) {
-        std::println("   {}  {:<9} {:<16} {}  {}", entry.index, entry.when(), entry.day_text(),
-                     entry.active ? "on " : "off", scene_text(use.plan, *programming, entry));
+        std::println("   {}  {:<9} {:<16} {}  {}", entry.index, entry.when(), entry.day_text(), entry.active ? "on " : "off", scene_text(use.plan, *programming, entry));
         if (detailed)
-          std::println("      scene {}, {}, valid from {} ({})", entry.trigger_value,
-                       entry.recurrence, entry.begin_date, entry.validity);
+          std::println("      scene {}, {}, valid from {} ({})", entry.trigger_value, entry.recurrence, entry.begin_date, entry.validity);
       }
       std::println("");
     }
@@ -446,13 +409,10 @@ namespace {
   }
 
   // Print one switch time the way the timer commands report a change.
-  void report(session use, const girax1::device& one, const girax1::timer& programming,
-              unsigned index)
+  void report(session use, const girax1::device& one, const girax1::timer& programming, unsigned index)
   {
     if (const auto* entry = programming.entry(index); entry != nullptr)
-      std::println("{}  {}  {}  {}  {}  {}", use.plan.path(one), entry->index, entry->when(),
-                   entry->day_text(), entry->active ? "on" : "off",
-                   scene_text(use.plan, programming, *entry));
+      std::println("{}  {}  {}  {}  {}  {}", use.plan.path(one), entry->index, entry->when(), entry->day_text(), entry->active ? "on" : "off", scene_text(use.plan, programming, *entry));
   }
 
   int command_settime(session use, std::span<const std::string> arguments)
@@ -465,7 +425,7 @@ namespace {
     if (one == nullptr)
       return 1;
     const auto index = as_number(arguments[1]);
-    if (!index) [[unlikely]] {
+    if (! index) [[unlikely]] {
       complain("settime: '{}' is not a switch time index", arguments[1]);
       return 1;
     }
@@ -479,7 +439,7 @@ namespace {
       const auto& argument = arguments[i];
       if (argument == "--days" && i + 1 < arguments.size()) {
         const auto days = parse_days(arguments[++i]);
-        if (!days) [[unlikely]] {
+        if (! days) [[unlikely]] {
           complain("settime: '{}' is not a days specification", arguments[i]);
           return 1;
         }
@@ -489,7 +449,7 @@ namespace {
         fields["active"] = argument == "--active" ? "true" : "false";
       else if (argument == "--scene" && i + 1 < arguments.size()) {
         const auto scene = as_number(arguments[++i]);
-        if (!scene) [[unlikely]] {
+        if (! scene) [[unlikely]] {
           complain("settime: '{}' is not a scene number", arguments[i]);
           return 1;
         }
@@ -508,7 +468,7 @@ namespace {
     }
 
     auto programming = use.device.read_timer(one->timer_channel);
-    if (!programming) [[unlikely]] {
+    if (! programming) [[unlikely]] {
       complain("{}: {}", use.plan.path(*one), programming.error().message);
       return 1;
     }
@@ -516,23 +476,21 @@ namespace {
       std::string available;
       for (const auto& entry : programming->switch_times)
         available += std::format("{}{}", available.empty() ? "" : ", ", entry.index);
-      complain("{} has no switch time {}; programmed: {}", use.plan.path(*one), *index,
-               available.empty() ? "none" : available);
+      complain("{} has no switch time {}; programmed: {}", use.plan.path(*one), *index, available.empty() ? "none" : available);
       return 1;
     }
 
-    if (auto written = use.device.set_switch_time(one->timer_channel, *index, fields);
-        !written) [[unlikely]] {
+    if (auto written = use.device.set_switch_time(one->timer_channel, *index, fields); ! written) [[unlikely]] {
       complain("{}: {}", use.plan.path(*one), written.error().message);
       return 1;
     }
     programming = use.device.read_timer(one->timer_channel);
-    if (!programming) [[unlikely]] {
+    if (! programming) [[unlikely]] {
       complain("{}: {}", use.plan.path(*one), programming.error().message);
       return 1;
     }
     report(use, *one, *programming, *index);
-    if (!programming->next_trigger.empty())
+    if (! programming->next_trigger.empty())
       std::println("next {}", programming->next_trigger);
     return 0;
   }
@@ -551,7 +509,7 @@ namespace {
       return 1;
     }
     const auto when = time_of_day(arguments[1]);
-    if (!when) [[unlikely]] {
+    if (! when) [[unlikely]] {
       complain("addtime: '{}' is not a time of day such as 06:30", arguments[1]);
       return 1;
     }
@@ -570,21 +528,18 @@ namespace {
       point_name = cover_point;
       value = action == "down" ? "1" : "0";
       family = "move";
-    } else if (const auto percent = as_number(action);
-               percent && *percent <= girax1::brightness_max) {
+    } else if (const auto percent = as_number(action); percent && *percent <= girax1::brightness_max) {
       point_name = brightness_point;
       value = std::format("{}", *percent);
       family = "dim";
     } else [[unlikely]] {
-      complain("'{}' is not an action; use on, off, up, down or a brightness from 0 to {}",
-               action, girax1::brightness_max);
+      complain("'{}' is not an action; use on, off, up, down or a brightness from 0 to {}", action, girax1::brightness_max);
       return 1;
     }
 
     const auto* point = one->point(point_name);
-    if (point == nullptr || !point->usable()) [[unlikely]] {
-      complain("a {} has no {} data point, so it cannot do '{}'", one->kind(), point_name,
-               action);
+    if (point == nullptr || ! point->usable()) [[unlikely]] {
+      complain("a {} has no {} data point, so it cannot do '{}'", one->kind(), point_name, action);
       return 1;
     }
 
@@ -593,7 +548,7 @@ namespace {
     for (std::size_t i = 3; i < arguments.size(); ++i) {
       if (arguments[i] == "--days" && i + 1 < arguments.size()) {
         const auto parsed = parse_days(arguments[++i]);
-        if (!parsed) [[unlikely]] {
+        if (! parsed) [[unlikely]] {
           complain("addtime: '{}' is not a days specification", arguments[i]);
           return 1;
         }
@@ -609,7 +564,7 @@ namespace {
     }
 
     auto programming = use.device.read_timer(one->timer_channel);
-    if (!programming) [[unlikely]] {
+    if (! programming) [[unlikely]] {
       complain("{}: {}", use.plan.path(*one), programming.error().message);
       return 1;
     }
@@ -617,17 +572,19 @@ namespace {
     const auto scene_writing = [&](const girax1::timer& in) -> std::optional<unsigned> {
       for (const auto& [number, which] : in.scenes)
         for (const auto& made : which.actions)
-          if (made.point_id == point->point_id
-              && std::atoll(made.value.c_str()) == std::atoll(value.c_str()))
+          if (made.point_id == point->point_id && std::atoll(made.value.c_str()) == std::atoll(value.c_str()))
             return number;
       return std::nullopt;
     };
 
     auto scene = scene_writing(*programming);
-    if (!scene) {
-      if (!programming->scenes.empty()) [[unlikely]] {
-        complain("{}: no scene writes '{}'; the channel already has scenes, "
-                 "so none are created", use.plan.path(*one), action);
+    if (! scene) {
+      if (! programming->scenes.empty()) [[unlikely]] {
+        complain(
+            "{}: no scene writes '{}'; the channel already has scenes, "
+            "so none are created",
+            use.plan.path(*one), action
+        );
         return 1;
       }
       // A channel without scenes gets the set the Gira app would create for it.
@@ -640,32 +597,29 @@ namespace {
         for (unsigned step = 0, number = 1; step <= girax1::brightness_max; step += 10, ++number)
           wanted.emplace_back(number, std::format("dim-{}", step), std::format("{}", step));
 
-      if (auto made = use.device.set_scene_set(one->timer_channel, point->point_id, wanted);
-          !made) [[unlikely]] {
+      if (auto made = use.device.set_scene_set(one->timer_channel, point->point_id, wanted); ! made) [[unlikely]] {
         complain("{}: {}", use.plan.path(*one), made.error().message);
         return 1;
       }
       programming = use.device.read_timer(one->timer_channel);
-      if (!programming) [[unlikely]] {
+      if (! programming) [[unlikely]] {
         complain("{}: {}", use.plan.path(*one), programming.error().message);
         return 1;
       }
       scene = scene_writing(*programming);
-      if (!scene) [[unlikely]] {
+      if (! scene) [[unlikely]] {
         complain("{}: the device did not take the scenes", use.plan.path(*one));
         return 1;
       }
     }
 
     const auto index = programming->free_index();
-    if (auto added = use.device.add_switch_time(one->timer_channel, index, *when,
-                                                girax1::write_days(days), *scene, active);
-        !added) [[unlikely]] {
+    if (auto added = use.device.add_switch_time(one->timer_channel, index, *when, girax1::write_days(days), *scene, active); ! added) [[unlikely]] {
       complain("{}: {}", use.plan.path(*one), added.error().message);
       return 1;
     }
     programming = use.device.read_timer(one->timer_channel);
-    if (!programming) [[unlikely]] {
+    if (! programming) [[unlikely]] {
       complain("{}: {}", use.plan.path(*one), programming.error().message);
       return 1;
     }
@@ -687,19 +641,18 @@ namespace {
     if (one == nullptr)
       return 1;
     const auto index = as_number(arguments[1]);
-    if (!index) [[unlikely]] {
+    if (! index) [[unlikely]] {
       complain("deltime: '{}' is not a switch time index", arguments[1]);
       return 1;
     }
-    const bool keep_scenes = std::ranges::contains(arguments.subspan(2),
-                                                   std::string("--keep-scenes"));
+    const bool keep_scenes = std::ranges::contains(arguments.subspan(2), std::string("--keep-scenes"));
     if (one->timer_channel == 0) [[unlikely]] {
       complain("{} has no timer channel", use.plan.path(*one));
       return 1;
     }
 
     auto programming = use.device.read_timer(one->timer_channel);
-    if (!programming) [[unlikely]] {
+    if (! programming) [[unlikely]] {
       complain("{}: {}", use.plan.path(*one), programming.error().message);
       return 1;
     }
@@ -707,32 +660,28 @@ namespace {
       std::string available;
       for (const auto& entry : programming->switch_times)
         available += std::format("{}{}", available.empty() ? "" : ", ", entry.index);
-      complain("{} has no switch time {}; programmed: {}", use.plan.path(*one), *index,
-               available.empty() ? "none" : available);
+      complain("{} has no switch time {}; programmed: {}", use.plan.path(*one), *index, available.empty() ? "none" : available);
       return 1;
     }
 
-    if (auto removed = use.device.remove_switch_time(one->timer_channel, *index);
-        !removed) [[unlikely]] {
+    if (auto removed = use.device.remove_switch_time(one->timer_channel, *index); ! removed) [[unlikely]] {
       complain("{}: {}", use.plan.path(*one), removed.error().message);
       return 1;
     }
     programming = use.device.read_timer(one->timer_channel);
-    if (!programming) [[unlikely]] {
+    if (! programming) [[unlikely]] {
       complain("{}: {}", use.plan.path(*one), programming.error().message);
       return 1;
     }
     // The app drops the scenes along with the last switch time that used them.
-    if (programming->switch_times.empty() && !keep_scenes)
-      if (auto cleared = use.device.clear_scenes(one->timer_channel); !cleared) [[unlikely]]
-        complain("{}: the scenes were kept: {}", use.plan.path(*one),
-                 cleared.error().message);
+    if (programming->switch_times.empty() && ! keep_scenes)
+      if (auto cleared = use.device.clear_scenes(one->timer_channel); ! cleared) [[unlikely]]
+        complain("{}: the scenes were kept: {}", use.plan.path(*one), cleared.error().message);
 
     std::string remaining;
     for (const auto& entry : programming->switch_times)
       remaining += std::format("{}{}", remaining.empty() ? "" : ", ", entry.index);
-    std::println("{}: switch time {} deleted, remaining: {}", use.plan.path(*one), *index,
-                 remaining.empty() ? "none" : remaining);
+    std::println("{}: switch time {} deleted, remaining: {}", use.plan.path(*one), *index, remaining.empty() ? "none" : remaining);
     return 0;
   }
 
@@ -745,22 +694,18 @@ namespace {
           names.emplace(point.point_id, std::format("{}/{}", one.name, point.name));
 
     const auto seconds = arguments.empty() ? std::optional<unsigned>{} : as_number(arguments[0]);
-    const auto deadline = std::chrono::steady_clock::now()
-      + std::chrono::seconds(seconds.value_or(0));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(seconds.value_or(0));
     std::println("watching for value changes, press Ctrl-C to stop");
-    while (!seconds || std::chrono::steady_clock::now() < deadline) {
+    while (! seconds || std::chrono::steady_clock::now() < deadline) {
       auto event = use.device.poll(std::chrono::milliseconds(1000));
-      if (!event) [[unlikely]] {
+      if (! event) [[unlikely]] {
         complain("{}", event.error().message);
         return 1;
       }
-      if (!*event)
+      if (! *event)
         continue;
       const auto found = names.find((*event)->point_id);
-      std::println("  {}: {} -> {}  (source {})",
-                   found == names.end() ? (*event)->urn : found->second,
-                   (*event)->old_value, (*event)->new_value,
-                   (*event)->source.empty() ? "device" : (*event)->source);
+      std::println("  {}: {} -> {}  (source {})", found == names.end() ? (*event)->urn : found->second, (*event)->old_value, (*event)->new_value, (*event)->source.empty() ? "device" : (*event)->source);
     }
     return 0;
   }
@@ -795,7 +740,8 @@ int main(int argc, char** argv)
   // the locale unless a format specification asks for it.
   try {
     std::locale::global(std::locale(""));
-  } catch (const std::runtime_error&) {
+  }
+  catch (const std::runtime_error&) {
     // An unusable setting in the environment is no reason to refuse to run.
   }
 
@@ -821,23 +767,22 @@ int main(int argc, char** argv)
   }
 
   const auto command = arguments[at];
-  const std::span rest(arguments.begin() + static_cast<std::ptrdiff_t>(at) + 1,
-                       arguments.end());
+  const std::span rest(arguments.begin() + static_cast<std::ptrdiff_t>(at) + 1, arguments.end());
 
   auto settings = girax1::load_config(settings_file);
-  if (!settings) [[unlikely]] {
+  if (! settings) [[unlikely]] {
     complain("configuration error: {}", settings.error().message);
     return 1;
   }
 
   girax1::stack device(*settings);
-  if (auto opened = device.connect(); !opened) [[unlikely]] {
+  if (auto opened = device.connect(); ! opened) [[unlikely]] {
     complain("error: {}", opened.error().message);
     return 1;
   }
 
   auto plan = device.ui_configuration();
-  if (!plan) [[unlikely]] {
+  if (! plan) [[unlikely]] {
     complain("error: {}", plan.error().message);
     return 1;
   }

@@ -11,6 +11,4 @@ __pycache__/
 proxy-cert.pem
 
 # C++ build artefacts
-*.o
-*.a
-/x1
+/build/
