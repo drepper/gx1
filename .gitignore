@@ -9,3 +9,8 @@ __pycache__/
 .venv/
 *.log
 proxy-cert.pem
+
+# C++ build artefacts
+*.o
+*.a
+/x1
