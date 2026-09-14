@@ -26,7 +26,7 @@ from typing import Callable
 
 import gx1
 from gx1.project import Device, Project
-from gx1.stack import Stack
+from gx1.stack import BRIGHTNESS_MAX, Stack
 
 DEFAULT_CONFIG = Path(os.environ.get('GX1_CONFIG', '~/.config/gx1.toml'))
 
@@ -36,6 +36,9 @@ SWITCH_POINT = 'OnOff'
 # The data points that drive and halt a covering.
 COVER_POINT = 'Up-Down'
 STOP_POINT = 'Step-Up-Down'
+
+# The data point holding the brightness of a dimmable light.
+BRIGHTNESS_POINT = 'Brightness'
 
 # German names of the grouping kinds, as the device itself presents them.
 GROUPING_LABELS = {'Trade': 'trade (Gewerk)', 'Location': 'location (Standort)',
@@ -78,6 +81,13 @@ def main() -> int:
                             help='device paths, names, rooms or patterns; at least one')
         moving.set_defaults(run=command_cover, action=name)
 
+    dimming = commands.add_parser('dim', help='set the brightness of the named lights')
+    dimming.add_argument('level', type=_percent, metavar='PERCENT',
+                         help=f'brightness from 0 to {BRIGHTNESS_MAX}')
+    dimming.add_argument('paths', nargs='+', metavar='PATH',
+                         help='device paths, names, rooms or patterns; at least one')
+    dimming.set_defaults(run=command_dim)
+
     args = parser.parse_args()
 
     try:
@@ -113,6 +123,37 @@ def command_switch(stack: Stack, project: Project, args: argparse.Namespace) -> 
             failed = True
             continue
         print(f'{project.path(device)} {_state(SWITCH_POINT, str(reply.get("value")))}')
+    return 1 if failed else 0
+
+
+def _percent(text: str) -> int:
+    """Parse and range check a brightness given on the command line."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f'{text!r} is not a whole number') from None
+    if not 0 <= value <= BRIGHTNESS_MAX:
+        raise argparse.ArgumentTypeError(f'brightness has to be between 0 and {BRIGHTNESS_MAX}')
+    return value
+
+
+def command_dim(stack: Stack, project: Project, args: argparse.Namespace) -> int:
+    """Set the brightness of every named light."""
+    devices, failed = _select(project, args.paths)
+    for device in devices:
+        point = device.point(BRIGHTNESS_POINT)
+        if point is None or not point.usable:
+            print(f'{project.path(device)}: no {BRIGHTNESS_POINT} data point, '
+                  f'a {device.kind} cannot be dimmed', file=sys.stderr)
+            failed = True
+            continue
+        try:
+            reply = stack.dim(point.point_id, args.level)
+        except gx1.X1Error as e:
+            print(f'{project.path(device)}: {e}', file=sys.stderr)
+            failed = True
+            continue
+        print(f'{project.path(device)} {_state(BRIGHTNESS_POINT, str(reply.get("value")))}')
     return 1 if failed else 0
 
 
