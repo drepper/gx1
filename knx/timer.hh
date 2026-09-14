@@ -2,7 +2,9 @@
 
 #include <array>
 #include <cstdint>
+#include <locale>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -12,9 +14,25 @@
 
 namespace knx {
 
-  // The weekday mask starts on Monday.
+  // The weekday mask starts on Monday.  These English names are always
+  // understood when parsing, whatever the locale says, so that a script keeps
+  // working wherever it is run.
   inline constexpr std::array<std::string_view, 7> weekday_names{
     "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
+  inline constexpr std::array<std::string_view, 7> weekday_full_names{
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"};
+
+  // Return the abbreviated name of a day, Monday being zero, as the locale
+  // spells it.  Printing always uses the abbreviated form.
+  std::string weekday_label(unsigned day, const std::locale& with = std::locale());
+
+  // Return the day a name selects, or nothing when it names none.
+  //
+  // Both the abbreviated and the full form are recognised, in the spelling of
+  // the locale as well as in English.  Comparison ignores case and a trailing
+  // full stop, which some locales append to the abbreviated form.
+  std::optional<unsigned> weekday_number(std::string_view name,
+                                         const std::locale& with = std::locale());
 
   // Character marking a day a switch time does not act on.
   inline constexpr char day_off = '-';
@@ -61,8 +79,9 @@ namespace knx {
     // Return the days this entry acts on, counting Monday as zero.
     std::set<unsigned> days() const { return read_days(weekdays); }
 
-    // Return the weekday mask as readable text such as "Mon-Fri".
-    std::string day_text() const;
+    // Return the weekday mask as readable text such as "Mon-Fri", using the
+    // abbreviated day names of the locale.
+    std::string day_text(const std::locale& with = std::locale()) const;
 
     // Return the time, marked up when it is not a plain time of day.
     std::string when() const;

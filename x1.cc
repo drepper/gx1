@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cstdlib>
+#include <locale>
 #include <format>
 #include <map>
 #include <print>
@@ -124,24 +125,14 @@ namespace {
     if (const auto found = groups.find(lowered); found != groups.end())
       return found->second;
 
-    const auto index_of = [](std::string_view name) -> std::optional<unsigned> {
-      for (unsigned i = 0; i < knx::weekday_names.size(); ++i) {
-        if (name.size() != knx::weekday_names[i].size())
-          continue;
-        if (std::ranges::equal(name, knx::weekday_names[i], {},
-                               [](unsigned char c) { return std::tolower(c); },
-                               [](unsigned char c) { return std::tolower(c); }))
-          return i;
-      }
-      return std::nullopt;
-    };
-
     std::set<unsigned> days;
     for (const auto piece : std::views::split(text, ',')) {
       const std::string_view part(piece.begin(), piece.end());
       const auto dash = part.find('-');
-      const auto first = index_of(dash == std::string_view::npos ? part : part.substr(0, dash));
-      const auto last = dash == std::string_view::npos ? first : index_of(part.substr(dash + 1));
+      const auto first = knx::weekday_number(dash == std::string_view::npos
+                                             ? part : part.substr(0, dash));
+      const auto last = dash == std::string_view::npos
+        ? first : knx::weekday_number(part.substr(dash + 1));
       if (!first || !last) [[unlikely]]
         return std::nullopt;
       for (unsigned day = *first;; day = (day + 1) % knx::weekday_names.size()) {
@@ -799,6 +790,15 @@ namespace {
 
 int main(int argc, char** argv)
 {
+  // Day names are printed and parsed in the language of the environment.  This
+  // does not disturb the rest of the output: std::format stays independent of
+  // the locale unless a format specification asks for it.
+  try {
+    std::locale::global(std::locale(""));
+  } catch (const std::runtime_error&) {
+    // An unusable setting in the environment is no reason to refuse to run.
+  }
+
   const std::vector<std::string> arguments(argv + 1, argv + argc);
   std::filesystem::path settings_file(default_config);
 

@@ -1,12 +1,33 @@
 #include "timer.hh"
 
 #include <algorithm>
+#include <cctype>
 #include <charconv>
+#include <chrono>
 #include <format>
 
 namespace knx {
 
   namespace {
+
+    // Convert an index counting Monday as zero to the day chrono numbers from
+    // Sunday, which is what its formatter expects.
+    std::chrono::weekday as_chrono(unsigned day)
+    {
+      return std::chrono::weekday{(day + 1) % 7};
+    }
+
+    // Fold a day name for comparison: lower case, and without the trailing full
+    // stop that locales such as the French one put after an abbreviation.
+    std::string folded(std::string_view text)
+    {
+      std::string out;
+      for (const auto byte : text)
+        out += static_cast<char>(std::tolower(static_cast<unsigned char>(byte)));
+      while (out.ends_with('.'))
+        out.pop_back();
+      return out;
+    }
 
     // Return a field the device sends as a string, as a number.
     unsigned number_of(const Json::Value& value)
@@ -44,6 +65,30 @@ namespace knx {
 
   } // namespace
 
+  std::string weekday_label(unsigned day, const std::locale& with)
+  {
+    if (day >= weekday_names.size()) [[unlikely]]
+      return {};
+    return std::format(with, "{:L%a}", as_chrono(day));
+  }
+
+  std::optional<unsigned> weekday_number(std::string_view name, const std::locale& with)
+  {
+    const auto wanted = folded(name);
+    if (wanted.empty()) [[unlikely]]
+      return std::nullopt;
+
+    for (unsigned day = 0; day < weekday_names.size(); ++day) {
+      // English first, so that it is understood whatever the locale is.
+      if (folded(weekday_names[day]) == wanted || folded(weekday_full_names[day]) == wanted)
+        return day;
+      if (folded(std::format(with, "{:L%a}", as_chrono(day))) == wanted
+          || folded(std::format(with, "{:L%A}", as_chrono(day))) == wanted)
+        return day;
+    }
+    return std::nullopt;
+  }
+
   std::set<unsigned> read_days(std::string_view mask)
   {
     std::set<unsigned> days;
@@ -61,7 +106,7 @@ namespace knx {
     return mask;
   }
 
-  std::string switch_time::day_text() const
+  std::string switch_time::day_text(const std::locale& with) const
   {
     if (weekdays.size() != weekday_names.size())
       return weekdays;
@@ -78,9 +123,9 @@ namespace knx {
         last = next;
       if (!out.empty())
         out += ',';
-      out += weekday_names[*it];
+      out += weekday_label(*it, with);
       if (last != it)
-        out += std::format("-{}", weekday_names[*last]);
+        out += std::format("-{}", weekday_label(*last, with));
       it = std::next(last);
     }
     return out;
