@@ -363,6 +363,105 @@ namespace {
     return drive(use, arguments.subspan(1), brightness_point, [&](unsigned id) { return use.device.dim(id, *percent); }, "cannot be dimmed", true);
   }
 
+  // Wait, while keeping the connection to the device alive.
+  //
+  // Sleeping outright would leave the pings the device sends every few seconds
+  // unanswered, and it drops a connection that stops replying.  Polling answers
+  // them as a side effect.
+  void wait_alive(session use, std::chrono::duration<double> seconds)
+  {
+    const auto deadline = std::chrono::steady_clock::now() + seconds;
+    for (auto left = seconds; left.count() > 0;
+         left = deadline - std::chrono::steady_clock::now())
+      static_cast<void>(use.device.poll(std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::min(left, std::chrono::duration<double>(1.0)))));
+  }
+
+  // Close the named blinds by a percentage of their travel.
+  //
+  // Nothing reports where a blind stands, so the position is reached by timing:
+  // the blind is driven fully open first, which is the one position that can be
+  // relied upon, and then closed for the matching fraction of its travel time.
+  int command_close(session use, std::span<const std::string> arguments)
+  {
+    if (arguments.size() < 2) [[unlikely]] {
+      complain("close: a percentage and at least one device are required");
+      return 1;
+    }
+    const auto percent = as_number(arguments[0]);
+    if (! percent || *percent > girax1::brightness_max) [[unlikely]] {
+      complain("close: the percentage has to be between 0 and 100");
+      return 1;
+    }
+
+    auto [devices, failed] = select(use.plan, arguments.subspan(1));
+    const auto named = named_alone(use.plan, arguments.subspan(1));
+
+    struct blind {
+      const girax1::device* which;
+      unsigned move;
+      unsigned halt;
+      double travel;
+    };
+    std::vector<blind> blinds;
+    for (const auto* one : devices) {
+      const auto* move = one->point(cover_point);
+      const auto* halt = one->point(stop_point);
+      if (move == nullptr || ! move->usable() || halt == nullptr || ! halt->usable()) {
+        if (named.contains(one->view_id)) {
+          complain("{}: a {} cannot be closed by a percentage", use.plan.path(*one),
+                   one->kind());
+          failed = true;
+        }
+        continue;
+      }
+      blinds.push_back({one, move->point_id, halt->point_id,
+                        use.device.settings().travel_seconds(use.plan.path(*one))});
+    }
+    if (blinds.empty())
+      return failed ? 1 : 0;
+
+    // Drive fully open first: that is the only position known without feedback.
+    for (const auto& one : blinds)
+      if (auto sent = use.device.move(one.move, false); ! sent) [[unlikely]] {
+        complain("{}: {}", use.plan.path(*one.which), sent.error().message);
+        return 1;
+      }
+    const auto opening = std::ranges::max(blinds, {}, &blind::travel).travel;
+    std::println("opening {} blind{}, waiting {:g}s", blinds.size(),
+                 blinds.size() == 1 ? "" : "s", opening);
+    wait_alive(use, std::chrono::duration<double>(opening));
+
+    if (*percent == 0) {
+      for (const auto& one : blinds)
+        std::println("{} open", use.plan.path(*one.which));
+      return failed ? 1 : 0;
+    }
+
+    // Close them together and halt each one after its own share of the travel.
+    const auto started = std::chrono::steady_clock::now();
+    for (const auto& one : blinds)
+      if (auto sent = use.device.move(one.move, true); ! sent) [[unlikely]] {
+        complain("{}: {}", use.plan.path(*one.which), sent.error().message);
+        return 1;
+      }
+    auto schedule = blinds;
+    std::ranges::stable_sort(schedule, {}, &blind::travel);
+    for (const auto& one : schedule) {
+      const auto due = one.travel * *percent / 100.0;
+      wait_alive(use, std::chrono::duration<double>(due)
+                 - (std::chrono::steady_clock::now() - started));
+      if (*percent < girax1::brightness_max)
+        if (auto sent = use.device.stop(one.halt); ! sent) [[unlikely]]
+          complain("{}: {}", use.plan.path(*one.which), sent.error().message);
+      std::println("{} closed {}% ({:.1f}s of {:g}s)", use.plan.path(*one.which), *percent,
+                   due, one.travel);
+    }
+    if (*percent >= girax1::brightness_max)
+      std::println("left running to the end of travel");
+    return failed ? 1 : 0;
+  }
+
   int command_timers(session use, std::span<const std::string> arguments)
   {
     std::vector<std::string> patterns;
@@ -710,6 +809,31 @@ namespace {
     return 0;
   }
 
+  // Give every blind an entry for its travel time, so the file can be corrected.
+  //
+  // The default is only a guess, and a guess nobody can see is a guess nobody
+  // will fix; writing the entries out puts the number where it can be measured.
+  void record_blinds(girax1::stack& device, const girax1::project& plan)
+  {
+    std::vector<std::string> blinds;
+    for (const auto& one : plan.devices())
+      if (const auto* point = one.point(cover_point); point != nullptr && point->usable())
+        blinds.push_back(plan.path(one));
+    if (blinds.empty() || device.settings().source.empty())
+      return;
+
+    auto added = girax1::ensure_travel_entries(device.settings().source, blinds,
+                                               device.settings().travel_default);
+    if (! added) [[unlikely]] {
+      complain("cannot record the blinds: {}", added.error().message);
+      return;
+    }
+    if (! added->empty())
+      complain("added {} blind{} to {} at {:g}s each; correct the entries to match your blinds",
+               added->size(), added->size() == 1 ? "" : "s",
+               device.settings().source.string(), device.settings().travel_default);
+  }
+
   void usage()
   {
     std::println("usage: x1 [-c CONFIG] COMMAND [ARGUMENT...]");
@@ -720,6 +844,7 @@ namespace {
     std::println("  off PATH...                   switch devices off");
     std::println("  up|down|stop PATH...          drive or halt coverings");
     std::println("  dim PERCENT PATH...           set the brightness of lights");
+    std::println("  close PERCENT PATH...         close blinds by a percentage of travel");
     std::println("  timers [PATH...] [--all] [--long]        read the timer programming");
     std::println("  settime PATH INDEX [TIME] [--days D] [--active|--no-active] [--scene N]");
     std::println("  addtime PATH TIME ACTION [--days D] [--active]");
@@ -786,6 +911,7 @@ int main(int argc, char** argv)
     complain("error: {}", plan.error().message);
     return 1;
   }
+  record_blinds(device, *plan);
   const session use{.device = device, .plan = *plan};
 
   if (command == "list")
@@ -798,6 +924,8 @@ int main(int argc, char** argv)
     return command_cover(use, rest, command);
   if (command == "dim")
     return command_dim(use, rest);
+  if (command == "close")
+    return command_close(use, rest);
   if (command == "timers")
     return command_timers(use, rest);
   if (command == "settime")

@@ -45,3 +45,14 @@ enabled = false
 verify = false
 
 # ca_cert = "~/.config/girax1-device.pem"
+
+[blinds]
+# How long a blind needs for the journey from fully open to fully closed, in
+# seconds.  Used for any blind without an entry of its own below.
+default_seconds = 30
+
+# The programs add an entry here for every blind of the project the first time
+# they run, all at the default above.  Measure a blind and correct its entry to
+# make closing by a percentage accurate; the blinds in one house rarely agree.
+[blinds.seconds]
+# "Küche/Rollo links" = 28

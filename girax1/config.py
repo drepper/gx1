@@ -5,14 +5,22 @@ contains the credentials of the X1 device.  See ``girax1.toml.example``.
 """
 
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 DEFAULT_PORT_TLS = 443
 DEFAULT_PORT_PLAIN = 80
 DEFAULT_TIMEOUT = 10.0
 DEFAULT_CLIENT_ID = 'org.akkadia.girax1'
+
+# How long a blind is assumed to need for the journey from open to closed when
+# the configuration says nothing about it.
+DEFAULT_TRAVEL_SECONDS = 30.0
+
+# Where the travel times live in the configuration file.
+BLIND_SECTION = 'blinds'
+TRAVEL_TABLE = 'blinds.seconds'
 
 
 class ConfigError(Exception):
@@ -34,6 +42,12 @@ class Config:
     ca_cert: Path | None = None
     timeout: float = DEFAULT_TIMEOUT
     source: Path | None = None
+    travel_default: float = DEFAULT_TRAVEL_SECONDS
+    travel: dict[str, float] = field(default_factory=dict)
+
+    def travel_seconds(self, path: str) -> float:
+        """Return how long the named blind needs from fully open to fully closed."""
+        return self.travel.get(path, self.travel_default)
 
     @property
     def scheme(self) -> str:
@@ -96,6 +110,17 @@ def load(filename: str | Path) -> Config:
 
     ca_cert = _typed(tls, 'tls', 'ca_cert', str, None, source)
 
+    blinds = _section(data, BLIND_SECTION, source)
+    travel_default = _typed(blinds, BLIND_SECTION, 'default_seconds', float,
+                            DEFAULT_TRAVEL_SECONDS, source) or DEFAULT_TRAVEL_SECONDS
+    travel: dict[str, float] = {}
+    for name, seconds in (blinds.get('seconds') or {}).items():
+        if not isinstance(seconds, (int, float)) or isinstance(seconds, bool) \
+                or seconds <= 0:
+            raise ConfigError(f'{source}: {TRAVEL_TABLE}."{name}" has to be a positive '
+                              'number of seconds')
+        travel[name] = float(seconds)
+
     # Without an explicit port the default follows the choice of protocol.
     use_tls = _typed(tls, 'tls', 'enabled', bool, True, source) is not False
     port = _typed(device, 'device', 'port', int, None, source)
@@ -114,4 +139,36 @@ def load(filename: str | Path) -> Config:
                   ca_cert=Path(ca_cert).expanduser() if ca_cert is not None else None,
                   timeout=_typed(device, 'device', 'timeout', float, DEFAULT_TIMEOUT, source)
                           or DEFAULT_TIMEOUT,
-                  source=source)
+                  source=source,
+                  travel_default=travel_default,
+                  travel=travel)
+
+
+def ensure_travel_entries(source: Path, paths: Iterable[str],
+                          default: float = DEFAULT_TRAVEL_SECONDS) -> list[str]:
+    """Add a travel time for every named blind the file does not mention yet.
+
+    The file is edited as text rather than rewritten from the parsed data, so
+    that comments and layout survive.  Returns the names that were added.
+    """
+    text = source.read_text(encoding='utf-8')
+    known = set((tomllib.loads(text).get(BLIND_SECTION, {}).get('seconds') or {}))
+    missing = [p for p in paths if p not in known]
+    if not missing:
+        return []
+
+    added = ''.join(f'"{p}" = {default:g}\n' for p in missing)
+    marker = f'[{TRAVEL_TABLE}]'
+    if (at := text.find(marker)) >= 0:
+        # Keep the new entries inside the table that is already there.
+        line_end = text.find('\n', at) + 1
+        text = text[:line_end] + added + text[line_end:]
+    else:
+        if not text.endswith('\n'):
+            text += '\n'
+        text += ('\n# How long each blind needs for the journey from fully open to fully\n'
+                 '# closed, in seconds.  Measure a blind and correct its entry to make\n'
+                 '# closing by a percentage accurate.\n'
+                 f'{marker}\n{added}')
+    source.write_text(text, encoding='utf-8')
+    return missing

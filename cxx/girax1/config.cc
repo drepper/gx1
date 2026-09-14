@@ -3,6 +3,9 @@
 #include <cstdlib>
 #include <format>
 #include <optional>
+#include <sstream>
+#include <set>
+#include <fstream>
 
 #include <toml++/toml.hpp>
 
@@ -76,7 +79,80 @@ namespace girax1 {
     if (const auto seconds = (*device)["timeout"].value<double>(); seconds)
       result.timeout = std::chrono::milliseconds(static_cast<long>(*seconds * 1000));
 
+    if (const auto blinds = parsed[blind_section].as_table(); blinds != nullptr) {
+      result.travel_default = (*blinds)["default_seconds"].value_or(default_travel_seconds);
+      if (const auto seconds = (*blinds)["seconds"].as_table(); seconds != nullptr)
+        for (const auto& [name, node] : *seconds) {
+          const auto value = node.value<double>();
+          if (! value || *value <= 0.0) [[unlikely]]
+            return fail(std::format("{}: {}.\"{}\" has to be a positive number of seconds",
+                                    path.string(), travel_table, std::string_view(name.str())));
+          result.travel.emplace(std::string(name.str()), *value);
+        }
+    }
+
     return result;
+  }
+
+  result<std::vector<std::string>> ensure_travel_entries(const std::filesystem::path& source,
+                                                         const std::vector<std::string>& paths,
+                                                         double fallback)
+  {
+    std::string text;
+    try {
+      const std::ifstream in(source);
+      if (! in) [[unlikely]]
+        return fail(std::format("cannot read {}", source.string()));
+      std::ostringstream held;
+      held << in.rdbuf();
+      text = held.str();
+    } catch (const std::exception& e) {
+      return fail(std::format("cannot read {}: {}", source.string(), e.what()));
+    }
+
+    std::set<std::string> known;
+    try {
+      const auto parsed = toml::parse(text);
+      if (const auto blinds = parsed[blind_section].as_table(); blinds != nullptr)
+        if (const auto seconds = (*blinds)["seconds"].as_table(); seconds != nullptr)
+          for (const auto& [name, _] : *seconds)
+            known.emplace(name.str());
+    } catch (const toml::parse_error& e) {
+      return fail(std::format("{}: {}", source.string(), e.description()));
+    }
+
+    std::vector<std::string> missing;
+    for (const auto& one : paths)
+      if (! known.contains(one))
+        missing.push_back(one);
+    if (missing.empty())
+      return missing;
+
+    std::string added;
+    for (const auto& one : missing)
+      added += std::format("\"{}\" = {:g}\n", one, fallback);
+
+    const auto marker = std::format("[{}]", travel_table);
+    if (const auto at = text.find(marker); at != std::string::npos) {
+      // Keep the new entries inside the table that is already there.
+      const auto line_end = text.find('\n', at) + 1;
+      text.insert(line_end, added);
+    } else {
+      if (! text.ends_with('\n'))
+        text += '\n';
+      text += std::format("\n# How long each blind needs for the journey from fully open to"
+                          " fully\n# closed, in seconds.  Measure a blind and correct its entry"
+                          " to make\n# closing by a percentage accurate.\n{}\n{}",
+                          marker, added);
+    }
+
+    std::ofstream out(source, std::ios::trunc);
+    if (! out) [[unlikely]]
+      return fail(std::format("cannot write {}", source.string()));
+    out << text;
+    if (! out) [[unlikely]]
+      return fail(std::format("cannot write {}", source.string()));
+    return missing;
   }
 
 } // namespace girax1

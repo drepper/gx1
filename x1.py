@@ -21,6 +21,7 @@ device name, for example ``Flur/Deckenlampen Flur``.
 import argparse
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -89,6 +90,13 @@ def main() -> int:
                          help='device paths, names, rooms or patterns; at least one')
     dimming.set_defaults(run=command_dim)
 
+    closing = commands.add_parser('close', help='close the named blinds by a percentage')
+    closing.add_argument('percent', type=_percent, metavar='PERCENT',
+                         help='how far to close, 0 leaves the blind open and 100 closes it')
+    closing.add_argument('paths', nargs='+', metavar='PATH',
+                         help='device paths, names, rooms or patterns; at least one')
+    closing.set_defaults(run=command_close)
+
     timers = commands.add_parser('timers', help='read out the timer programming')
     timers.add_argument('paths', nargs='*', metavar='PATH',
                         help='device paths, names, rooms or patterns; all devices when omitted')
@@ -140,6 +148,7 @@ def main() -> int:
     try:
         with Stack(args.config) as stack:
             project = Project.parse(stack.ui_configuration())
+            _record_blinds(stack, project)
             run: Callable[[Stack, Project, argparse.Namespace], int] = args.run
             return run(stack, project, args)
     except girax1.ConfigError as e:
@@ -453,13 +462,13 @@ def _scene(project: Project, timer, entry) -> str:
 
 
 def _percent(text: str) -> int:
-    """Parse and range check a brightness given on the command line."""
+    """Parse and range check a percentage given on the command line."""
     try:
         value = int(text)
     except ValueError:
         raise argparse.ArgumentTypeError(f'{text!r} is not a whole number') from None
     if not 0 <= value <= BRIGHTNESS_MAX:
-        raise argparse.ArgumentTypeError(f'brightness has to be between 0 and {BRIGHTNESS_MAX}')
+        raise argparse.ArgumentTypeError(f'has to be a percentage between 0 and {BRIGHTNESS_MAX}')
     return value
 
 
@@ -482,12 +491,107 @@ def command_dim(stack: Stack, project: Project, args: argparse.Namespace) -> int
                 failed = True
             continue
         try:
-            reply = stack.dim(point.point_id, args.level)
+            reply = stack.dim(point.point_id, args.percent)
         except girax1.X1Error as e:
             print(f'{project.path(device)}: {e}', file=sys.stderr)
             failed = True
             continue
         print(f'{project.path(device)} {_state(BRIGHTNESS_POINT, str(reply.get("value")))}')
+    return 1 if failed else 0
+
+
+def _record_blinds(stack: Stack, project: Project) -> None:
+    """Give every blind an entry for its travel time, so the file can be corrected.
+
+    The default is only a guess, and a guess nobody can see is a guess nobody
+    will fix; writing the entries out puts the number where it can be measured
+    and corrected.
+    """
+    blinds = [project.path(d) for d in project
+              if (p := d.point(COVER_POINT)) is not None and p.usable]
+    if not blinds or stack.config.source is None:
+        return
+    try:
+        added = girax1.ensure_travel_entries(stack.config.source, blinds,
+                                             stack.config.travel_default)
+    except OSError as e:
+        print(f'cannot record the blinds in {stack.config.source}: {e}', file=sys.stderr)
+        return
+    if added:
+        print(f'added {len(added)} blind{"" if len(added) == 1 else "s"} to '
+              f'{stack.config.source} at {stack.config.travel_default:g}s each; '
+              'correct the entries to match your blinds', file=sys.stderr)
+        stack.config.travel.update(dict.fromkeys(added, stack.config.travel_default))
+
+
+def _wait(stack: Stack, seconds: float) -> None:
+    """Wait, while keeping the connection to the device alive.
+
+    Sleeping outright would leave the pings the device sends every few seconds
+    unanswered, and it drops a connection that stops replying.  Polling answers
+    them as a side effect.
+    """
+    deadline = time.monotonic() + seconds
+    while (left := deadline - time.monotonic()) > 0:
+        stack.poll(timeout=min(left, 1.0))
+
+
+def command_close(stack: Stack, project: Project, args: argparse.Namespace) -> int:
+    """Close the named blinds by a percentage of their travel.
+
+    Nothing reports where a blind stands, so the position is reached by timing:
+    the blind is driven fully open first, which is the one position that can be
+    relied upon, and then closed for the matching fraction of its travel time.
+    """
+    devices, failed = _select(project, args.paths)
+    named = _named(project, args.paths)
+
+    blinds = []
+    for device in devices:
+        move, halt = device.point(COVER_POINT), device.point(STOP_POINT)
+        if move is None or not move.usable or halt is None or not halt.usable:
+            if device.view_id in named:
+                print(f'{project.path(device)}: a {device.kind} cannot be closed by a '
+                      'percentage', file=sys.stderr)
+                failed = True
+            continue
+        blinds.append((device, move, halt))
+    if not blinds:
+        return 1 if failed else 0
+
+    travel = {d.view_id: stack.config.travel_seconds(project.path(d)) for d, _, _ in blinds}
+
+    try:
+        # Drive fully open first: that is the only position known without feedback.
+        for device, move, _ in blinds:
+            stack.move(move.point_id, False)
+        opening = max(travel.values())
+        print(f'opening {len(blinds)} blind{"" if len(blinds) == 1 else "s"}, '
+              f'waiting {opening:g}s')
+        _wait(stack, opening)
+
+        if args.percent <= 0:
+            for device, _, _ in blinds:
+                print(f'{project.path(device)} open')
+            return 1 if failed else 0
+
+        # Close them together and halt each one after its own share of the travel.
+        started = time.monotonic()
+        for device, move, _ in blinds:
+            stack.move(move.point_id, True)
+        schedule = sorted((travel[d.view_id] * args.percent / 100, order, d, halt)
+                          for order, (d, _, halt) in enumerate(blinds))
+        for deadline, _, device, halt in schedule:
+            _wait(stack, deadline - (time.monotonic() - started))
+            if args.percent < 100:
+                stack.stop(halt.point_id)
+            print(f'{project.path(device)} closed {args.percent}% '
+                  f'({deadline:.1f}s of {travel[device.view_id]:g}s)')
+        if args.percent >= 100:
+            print('left running to the end of travel')
+    except girax1.X1Error as e:
+        print(f'error: {e}', file=sys.stderr)
+        return 1
     return 1 if failed else 0
 
 
