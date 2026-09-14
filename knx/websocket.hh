@@ -5,7 +5,6 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <vector>
 
 #include <gnutls/gnutls.h>
 
@@ -15,8 +14,12 @@ namespace knx {
 
   // The frame types of RFC 6455 that this client has to deal with.
   enum class opcode : std::uint8_t {
-    continuation = 0x0, text = 0x1, binary = 0x2,
-    close = 0x8, ping = 0x9, pong = 0xa,
+    continuation = 0x0,
+    text = 0x1,
+    binary = 0x2,
+    close = 0x8,
+    ping = 0x9,
+    pong = 0xa,
   };
 
   // One message received from the peer.
@@ -36,15 +39,13 @@ namespace knx {
     ~websocket();
 
     // Neither the socket nor the TLS session may be owned twice.
-    websocket(const websocket&) = delete("a TLS session cannot be copied");
-    websocket& operator=(const websocket&) = delete("a TLS session cannot be copied");
+    websocket(const websocket&) = delete ("a TLS session cannot be copied");
+    websocket& operator=(const websocket&) = delete ("a TLS session cannot be copied");
     websocket(websocket&& other) noexcept;
     websocket& operator=(websocket&& other) noexcept;
 
     // Connect to the host and upgrade the connection to a WebSocket.
-    result<void> connect(const std::string& host, unsigned port, const std::string& path,
-                         std::chrono::milliseconds timeout, bool verify,
-                         const std::string& ca_cert);
+    result<void> connect(const std::string& host, unsigned port, const std::string& path, std::chrono::milliseconds timeout, bool verify, const std::string& ca_cert);
 
     // Send one unfragmented, masked frame.
     result<void> send(std::string_view payload, opcode kind = opcode::text);
@@ -59,7 +60,7 @@ namespace knx {
     void close();
 
     // Return whether the connection is still usable.
-    bool connected() const noexcept { return fd_ >= 0 && !closed_; }
+    bool connected() const noexcept { return fd_ >= 0 && ! closed_; }
 
   private:
     // Read more bytes from the peer into the buffer.
