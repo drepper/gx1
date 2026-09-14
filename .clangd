@@ -1,5 +1,6 @@
 Diagnostics:
   Suppress: ["pp_including_mainfile_in_preamble", "invalid_consteval_call", "c23-extensions"]
 CompileFlags:
-  Add: -ferror-limit=0
-  Add: -Icxx
+  # One list: two Add keys in the same map make clangd ignore the second, which
+  # dropped the include path and left every library header unresolvable.
+  Add: [-ferror-limit=0, -Icxx, -std=c++26]

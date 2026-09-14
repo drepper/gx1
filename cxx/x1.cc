@@ -372,9 +372,12 @@ namespace {
   {
     const auto deadline = std::chrono::steady_clock::now() + seconds;
     for (auto left = seconds; left.count() > 0;
-         left = deadline - std::chrono::steady_clock::now())
-      static_cast<void>(use.device.poll(std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::min(left, std::chrono::duration<double>(1.0)))));
+         left = deadline - std::chrono::steady_clock::now()) {
+      // Whatever arrives while waiting is of no interest here; answering the
+      // pings is the point, and that happens on the way.
+      auto _ = use.device.poll(std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::min(left, std::chrono::duration<double>(1.0))));
+    }
   }
 
   // Close the named blinds by a percentage of their travel.
