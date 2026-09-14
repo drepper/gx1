@@ -27,6 +27,9 @@ from gx1.stack import Stack
 
 DEFAULT_CONFIG = Path(os.environ.get('GX1_CONFIG', '~/.config/gx1.toml'))
 
+# The data point that switching a device on and off writes to.
+SWITCH_POINT = 'OnOff'
+
 # German names of the grouping kinds, as the device itself presents them.
 GROUPING_LABELS = {'Trade': 'trade (Gewerk)', 'Location': 'location (Standort)',
                    'Zone': 'zone (Zone)', 'Profile': 'profile (Profil)'}
@@ -54,6 +57,12 @@ def main() -> int:
                              'pattern such as "*/Rollo*" also work.  All devices when omitted')
     status.set_defaults(run=command_status)
 
+    for name, state in (('on', True), ('off', False)):
+        switching = commands.add_parser(name, help=f'switch the named devices {name}')
+        switching.add_argument('paths', nargs='+', metavar='PATH',
+                               help='device paths, names, rooms or patterns; at least one')
+        switching.set_defaults(run=command_switch, state=state)
+
     args = parser.parse_args()
 
     try:
@@ -72,20 +81,42 @@ def main() -> int:
         return 1
 
 
+def command_switch(stack: Stack, project: Project, args: argparse.Namespace) -> int:
+    """Switch every named device on or off."""
+    devices, failed = _select(project, args.paths)
+    for device in devices:
+        point = device.point(SWITCH_POINT)
+        if point is None or not point.usable:
+            print(f'{project.path(device)}: no {SWITCH_POINT} data point, '
+                  f'a {device.kind} cannot be switched this way', file=sys.stderr)
+            failed = True
+            continue
+        try:
+            reply = stack.switch(point.point_id, args.state)
+        except gx1.X1Error as e:
+            print(f'{project.path(device)}: {e}', file=sys.stderr)
+            failed = True
+            continue
+        print(f'{project.path(device)} {_state(SWITCH_POINT, str(reply.get("value")))}')
+    return 1 if failed else 0
+
+
+def _select(project: Project, patterns: list[str]) -> tuple[list[Device], bool]:
+    """Resolve the given patterns, reporting the ones that match nothing."""
+    devices: list[Device] = []
+    failed = False
+    for pattern in patterns:
+        found = project.resolve(pattern)
+        if not found:
+            print(f'no device matches {pattern!r}', file=sys.stderr)
+            failed = True
+        devices += (d for d in found if d not in devices)
+    return devices, failed
+
+
 def command_status(stack: Stack, project: Project, args: argparse.Namespace) -> int:
     """Print the current value of every data point of the selected devices."""
-    if args.paths:
-        devices: list[Device] = []
-        missing = False
-        for pattern in args.paths:
-            found = project.resolve(pattern)
-            if not found:
-                print(f'no device matches {pattern!r}', file=sys.stderr)
-                missing = True
-            devices += (d for d in found if d not in devices)
-    else:
-        devices = list(project)
-        missing = False
+    devices, missing = _select(project, args.paths) if args.paths else (list(project), False)
 
     values = {str(d.get('id')): d.get('state') for d in stack.process_view()}
     width = max((len(project.path(d)) for d in devices), default=0)
