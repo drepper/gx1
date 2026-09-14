@@ -13,6 +13,9 @@ device name, for example ``Flur/Deckenlampen Flur``.
     x1.py status                    show the status of every device
     x1.py status "Küche/"           show the status of one room
     x1.py status "*/Rollo*"         show the status of everything matching
+    x1.py on "Flur/Deckenlampen Flur"   switch one lamp on
+    x1.py down "Küche/"             lower every covering in the kitchen
+    x1.py stop "*/Rollo*"           halt every covering whose name matches
 """
 
 import argparse
@@ -29,6 +32,10 @@ DEFAULT_CONFIG = Path(os.environ.get('GX1_CONFIG', '~/.config/gx1.toml'))
 
 # The data point that switching a device on and off writes to.
 SWITCH_POINT = 'OnOff'
+
+# The data points that drive and halt a covering.
+COVER_POINT = 'Up-Down'
+STOP_POINT = 'Step-Up-Down'
 
 # German names of the grouping kinds, as the device itself presents them.
 GROUPING_LABELS = {'Trade': 'trade (Gewerk)', 'Location': 'location (Standort)',
@@ -62,6 +69,14 @@ def main() -> int:
         switching.add_argument('paths', nargs='+', metavar='PATH',
                                help='device paths, names, rooms or patterns; at least one')
         switching.set_defaults(run=command_switch, state=state)
+
+    for name, description in (('up', 'raise the named coverings'),
+                              ('down', 'lower the named coverings'),
+                              ('stop', 'halt the named coverings')):
+        moving = commands.add_parser(name, help=description)
+        moving.add_argument('paths', nargs='+', metavar='PATH',
+                            help='device paths, names, rooms or patterns; at least one')
+        moving.set_defaults(run=command_cover, action=name)
 
     args = parser.parse_args()
 
@@ -98,6 +113,34 @@ def command_switch(stack: Stack, project: Project, args: argparse.Namespace) -> 
             failed = True
             continue
         print(f'{project.path(device)} {_state(SWITCH_POINT, str(reply.get("value")))}')
+    return 1 if failed else 0
+
+
+def command_cover(stack: Stack, project: Project, args: argparse.Namespace) -> int:
+    """Drive or halt every named covering.
+
+    Halting writes to a different data point than driving, which is why the
+    two cases pick a different one here.
+    """
+    devices, failed = _select(project, args.paths)
+    wanted = STOP_POINT if args.action == 'stop' else COVER_POINT
+    for device in devices:
+        point = device.point(wanted)
+        if point is None or not point.usable:
+            print(f'{project.path(device)}: no {wanted} data point, '
+                  f'a {device.kind} cannot be moved', file=sys.stderr)
+            failed = True
+            continue
+        try:
+            if args.action == 'stop':
+                stack.stop(point.point_id)
+            else:
+                stack.move(point.point_id, args.action == 'down')
+        except gx1.X1Error as e:
+            print(f'{project.path(device)}: {e}', file=sys.stderr)
+            failed = True
+            continue
+        print(f'{project.path(device)} {args.action}')
     return 1 if failed else 0
 
 

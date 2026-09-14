@@ -183,9 +183,9 @@ class Stack:
     def move(self, point_id: int, down: bool) -> dict[str, Any]:
         """Start a covering moving via its ``Up-Down`` data point.
 
-        The device takes the same 0 and 1 as a switch here.  Which direction
-        each value means was not observed directly; 0 for up and 1 for down
-        follows the KNX convention for this kind of data point.
+        The device takes the same 0 and 1 as a switch here.  That 1 lowers the
+        covering and 0 raises it was confirmed on a real installation, and
+        agrees with the KNX convention for this kind of data point.
         """
         return self.set_value(1 if down else 0, point_id=point_id)
 
