@@ -126,7 +126,8 @@ class DeviceTile(ttk.Frame):
             if point.name == SWITCH_POINT:
                 for on, button in self.switches.items():
                     selected = value == ('1' if on else '0')
-                    button.configure(style='Selected.TButton' if selected else 'TButton')
+                    button.configure(style=('On.TButton' if on else 'Off.TButton')
+                                     if selected else 'TButton')
             if point.name == BRIGHTNESS_POINT and self.scale is not None:
                 self.app.without_commit(self.scale, _number(value))
                 if self.level is not None:
@@ -162,12 +163,15 @@ class Application(tk.Tk):
         self.small = self.normal.copy()
         self.small.configure(size=max(self.normal.cget('size') - 2, 7))
 
-        # The button for the state a device is in stands out from the other.
+        # The button for the state a device is in stands out from the other,
+        # green when it is on and red when it is off.
         style = ttk.Style(self)
-        style.configure('Selected.TButton', font=self.bold, foreground='white',
-                        background='#2e7d32')
-        style.map('Selected.TButton', background=[('active', '#388e3c')],
-                  foreground=[('active', 'white')])
+        for name, normal, active in (('On', '#2e7d32', '#388e3c'),
+                                     ('Off', '#c62828', '#d32f2f')):
+            style.configure(f'{name}.TButton', font=self.bold, foreground='white',
+                            background=normal)
+            style.map(f'{name}.TButton', background=[('active', active)],
+                      foreground=[('active', 'white')])
 
         self.body = ttk.Frame(self, padding=12)
         self.body.pack(fill='both', expand=True)
