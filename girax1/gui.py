@@ -57,12 +57,18 @@ class DeviceTile(ttk.Frame):
         ttk.Label(self, text=device.kind, font=app.small,
                   foreground='grey40').grid(row=1, column=0, sticky='w')
         self.status = ttk.Label(self, text='', font=app.normal)
-        self.status.grid(row=2, column=0, sticky='w', pady=(6, 4))
+        self.status.grid(row=2, column=0, sticky='w', pady=(6, 0))
 
         controls = ttk.Frame(self)
-        controls.grid(row=3, column=0, sticky='w')
+        controls.grid(row=3, column=0, sticky='w', pady=(6, 0))
         self.scale: ttk.Scale | None = None
         self.level: ttk.Label | None = None
+        # The On and Off button, keyed by the state they select.  The one
+        # matching the current state is highlighted.
+        self.switches: dict[bool, ttk.Button] = {}
+        # Data points whose value the controls already show, so the status line
+        # leaves them out.
+        self.shown: set[str] = set()
         self._build_controls(controls)
 
         text = _timer_text(timer, app.project)
@@ -73,11 +79,12 @@ class DeviceTile(ttk.Frame):
     def _build_controls(self, parent: ttk.Frame) -> None:
         """Add the buttons and sliders that suit this kind of device."""
         if (point := self.device.point(SWITCH_POINT)) is not None and point.usable:
-            ttk.Button(parent, text='On', width=5,
-                       command=lambda: self.app.switch(self.device, True)).pack(side='left')
-            ttk.Button(parent, text='Off', width=5,
-                       command=lambda: self.app.switch(self.device, False)).pack(side='left',
-                                                                                padx=(4, 0))
+            for on, text in ((True, 'On'), (False, 'Off')):
+                button = ttk.Button(parent, text=text, width=5,
+                                    command=lambda on=on: self.app.switch(self.device, on))
+                button.pack(side='left', padx=(0, 4))
+                self.switches[on] = button
+            self.shown.add(SWITCH_POINT)
         if (point := self.device.point(COVER_POINT)) is not None and point.usable:
             ttk.Button(parent, text='Up', width=5,
                        command=lambda: self.app.move(self.device, False)).pack(side='left')
@@ -98,6 +105,7 @@ class DeviceTile(ttk.Frame):
             self.scale.configure(command=self._preview_brightness)
             self.level = ttk.Label(row, text='-', font=self.app.small, width=5, anchor='e')
             self.level.grid(row=0, column=1, padx=(6, 0))
+            self.shown.add(BRIGHTNESS_POINT)
 
     def _preview_brightness(self, value: str) -> None:
         """Show the value under the slider while it is being dragged."""
@@ -111,17 +119,25 @@ class DeviceTile(ttk.Frame):
                                           * BRIGHTNESS_STEP))
 
     def refresh(self, values: dict[str, str]) -> None:
-        """Update the status line and the slider from the current values."""
+        """Update the controls and the status line from the current values."""
         parts = []
         for point in self.device.usable_points:
             value = values.get(str(point.point_id))
+            if point.name == SWITCH_POINT:
+                for on, button in self.switches.items():
+                    selected = value == ('1' if on else '0')
+                    button.configure(style='Selected.TButton' if selected else 'TButton')
             if point.name == BRIGHTNESS_POINT and self.scale is not None:
                 self.app.without_commit(self.scale, _number(value))
                 if self.level is not None:
-                    self.level.configure(text=f'{_number(value)}%')
-            if point.name not in TRIGGER_POINTS:
+                    self.level.configure(text=_readable(point.name, value))
+            if point.name not in TRIGGER_POINTS and point.name not in self.shown:
                 parts.append(f'{point.name} {_readable(point.name, value)}')
-        self.status.configure(text=', '.join(parts) or 'no data points')
+        if parts or not self.device.usable_points:
+            self.status.configure(text=', '.join(parts) or 'no data points')
+            self.status.grid()
+        else:
+            self.status.grid_remove()
 
 
 class Application(tk.Tk):
@@ -145,6 +161,13 @@ class Application(tk.Tk):
         self.bold.configure(weight='bold', size=self.normal.cget('size') + 1)
         self.small = self.normal.copy()
         self.small.configure(size=max(self.normal.cget('size') - 2, 7))
+
+        # The button for the state a device is in stands out from the other.
+        style = ttk.Style(self)
+        style.configure('Selected.TButton', font=self.bold, foreground='white',
+                        background='#2e7d32')
+        style.map('Selected.TButton', background=[('active', '#388e3c')],
+                  foreground=[('active', 'white')])
 
         self.body = ttk.Frame(self, padding=12)
         self.body.pack(fill='both', expand=True)
