@@ -12,10 +12,11 @@ Values are kept up to date from the events the device pushes, so the display
 also follows changes made from a wall switch or from the Gira app.
 """
 
+import math
 import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import messagebox, ttk
-from typing import Any
+from typing import Any, Callable
 
 import girax1
 from . import schedule
@@ -29,14 +30,41 @@ from .timer import WEEKDAYS, SwitchTime, Timer
 TRIGGER_POINTS = frozenset({STOP_POINT, 'Shift'})
 
 DEVICE_COLUMNS = 3
+BODY_PADDING = 12
+TILE_GAP = 6
+PAGE_HEADER_GAP = 10
 ROOM_COLUMNS = 3
 BRIGHTNESS_STEP = 5
 POLL_INTERVAL_MS = 400
 POLL_TIMEOUT = 0.02
 
-# Background of the switch times of a device, normally and under the pointer.
+# Geometry of the round light switch: the size of the canvas, the radius of the
+# button and the radius and width of the brightness ring around it.
+SWITCH_SIZE = 96
+SWITCH_RADIUS = 28
+RING_RADIUS = 40
+RING_WIDTH = 8
+
+# The brightness ring covers three quarters of a circle, starting at the lower
+# left and running clockwise over the top.  Angles count counterclockwise from
+# the right, as Tk does.
+RING_START = 225
+RING_SPAN = 270
+
+# Colours of the round light switch.
+SWITCH_ON = '#2e7d32'
+SWITCH_ON_PRESSED = '#1b5e20'
+SWITCH_OFF = '#c62828'
+SWITCH_OFF_PRESSED = '#8e0000'
+SWITCH_UNKNOWN = '#9e9e9e'
+SWITCH_UNKNOWN_PRESSED = '#707070'
+RING_TRACK = '#a8a8a8'
+RING_LEVEL = '#f9a825'
+
+# Background of the switch times of a device, and of anything that can be
+# clicked while the pointer is over it.
 TIMES_BACKGROUND = '#f4f4f4'
-TIMES_HOVER = '#e2e8f0'
+HOVER_BACKGROUND = '#e2e8f0'
 TIMES_SHOWN = 10
 
 # What can go wrong while programming a switch time.
@@ -55,21 +83,25 @@ class DeviceTile(ttk.Frame):
         super().__init__(master, padding=10, relief='ridge', borderwidth=1)
         self.app = app
         self.device = device
+        # Position in the grid of the room, counting rows over all pages.
+        self.row = 0
+        self.column = 0
         self.columnconfigure(0, weight=1)
 
-        ttk.Label(self, text=device.name, font=app.bold).grid(row=0, column=0, sticky='w')
-        ttk.Label(self, text=device.kind, font=app.small,
+        # Everything above the switch times, so that its height can be made the
+        # same in all tiles of a row and the switch times line up.
+        self.top = ttk.Frame(self)
+        self.top.grid(row=0, column=0, sticky='new')
+        self.top.columnconfigure(0, weight=1)
+        ttk.Label(self.top, text=device.name, font=app.bold).grid(row=0, column=0, sticky='w')
+        ttk.Label(self.top, text=device.kind, font=app.small,
                   foreground='grey40').grid(row=1, column=0, sticky='w')
-        self.status = ttk.Label(self, text='', font=app.normal)
+        self.status = ttk.Label(self.top, text='', font=app.normal)
         self.status.grid(row=2, column=0, sticky='w', pady=(6, 0))
 
-        controls = ttk.Frame(self)
-        controls.grid(row=3, column=0, sticky='w', pady=(6, 0))
-        self.scale: ttk.Scale | None = None
-        self.level: ttk.Label | None = None
-        # The On and Off button, keyed by the state they select.  The one
-        # matching the current state is highlighted.
-        self.switches: dict[bool, ttk.Button] = {}
+        controls = ttk.Frame(self.top)
+        controls.grid(row=3, column=0, pady=(6, 0))
+        self.light: LightSwitch | None = None
         # Data points whose value the controls already show, so the status line
         # leaves them out.
         self.shown: set[str] = set()
@@ -83,11 +115,13 @@ class DeviceTile(ttk.Frame):
             self.times = tk.Frame(self, background=TIMES_BACKGROUND, relief='groove',
                                   borderwidth=2, padx=10, pady=10, cursor='hand2',
                                   takefocus=True, highlightthickness=1)
-            self.times.grid(row=5, column=0, sticky='ew', pady=(8, 0))
-            self.times.bind('<Return>', self._open_times)
-            self.times.bind('<space>', self._open_times)
-            self.next.grid(row=6, column=0, sticky='w', pady=(4, 0))
+            self.times.grid(row=1, column=0, sticky='ew', pady=(8, 0))
+            self.next.grid(row=2, column=0, sticky='w', pady=(4, 0))
         self.show_timer(timer)
+
+    def align(self, height: int) -> None:
+        """Start the switch times at this height, as all tiles of a row do."""
+        self.rowconfigure(0, minsize=height)
 
     def show_timer(self, timer: Timer | None) -> None:
         """Lay out the switch times and the next time due."""
@@ -109,11 +143,7 @@ class DeviceTile(ttk.Frame):
                          foreground='grey50' if cells[-1] else 'black',
                          background=TIMES_BACKGROUND).grid(row=row, column=column, sticky='w',
                                                            padx=(0, 10))
-        # A click anywhere in the area counts, including on the text in it.
-        for widget in (self.times, *self.times.winfo_children()):
-            widget.bind('<Button-1>', self._open_times)
-            widget.bind('<Enter>', lambda _: self._hover(True))
-            widget.bind('<Leave>', lambda _: self._hover(False))
+        _clickable(self.times, lambda: TimesDialog(self.app, self.device), TIMES_BACKGROUND)
 
         if timer is not None and timer.next_trigger:
             self.next.configure(text=f'next {timer.next_trigger[:16]}')
@@ -121,74 +151,36 @@ class DeviceTile(ttk.Frame):
         else:
             self.next.grid_remove()
 
-    def _hover(self, inside: bool) -> None:
-        """Shade the switch times while the pointer is over them."""
-        if self.times is None:
-            return
-        colour = TIMES_HOVER if inside else TIMES_BACKGROUND
-        for widget in (self.times, *self.times.winfo_children()):
-            widget.configure(background=colour)
-
-    def _open_times(self, _event: tk.Event) -> None:
-        """Open the window to change the switch times."""
-        TimesDialog(self.app, self.device)
 
     def _build_controls(self, parent: ttk.Frame) -> None:
         """Add the buttons and sliders that suit this kind of device."""
-        if (point := self.device.point(SWITCH_POINT)) is not None and point.usable:
-            for on, text in ((True, 'On'), (False, 'Off')):
-                button = ttk.Button(parent, text=text, width=5,
-                                    command=lambda on=on: self.app.switch(self.device, on))
-                button.pack(side='left', padx=(0, 4))
-                self.switches[on] = button
-            self.shown.add(SWITCH_POINT)
+        switchable = (point := self.device.point(SWITCH_POINT)) is not None and point.usable
+        dimmable = (point := self.device.point(BRIGHTNESS_POINT)) is not None and point.usable
+        if switchable or dimmable:
+            self.light = LightSwitch(parent, self.app, switchable, dimmable,
+                                     lambda on: self.app.switch(self.device, on),
+                                     lambda percent: self.app.dim(self.device, percent))
+            self.light.pack(side='left')
+            self.shown.update(name for name, usable in ((SWITCH_POINT, switchable),
+                                                        (BRIGHTNESS_POINT, dimmable))
+                              if usable)
         if (point := self.device.point(COVER_POINT)) is not None and point.usable:
-            ttk.Button(parent, text='Up', width=5,
-                       command=lambda: self.app.move(self.device, False)).pack(side='left')
-            ttk.Button(parent, text='Stop', width=5,
-                       command=lambda: self.app.stop(self.device)).pack(side='left', padx=(4, 0))
-            ttk.Button(parent, text='Down', width=5,
-                       command=lambda: self.app.move(self.device, True)).pack(side='left',
-                                                                              padx=(4, 0))
-        if (point := self.device.point(BRIGHTNESS_POINT)) is not None and point.usable:
-            row = ttk.Frame(self)
-            row.grid(row=4, column=0, sticky='ew', pady=(8, 0))
-            row.columnconfigure(0, weight=1)
-            self.scale = ttk.Scale(row, from_=0, to=BRIGHTNESS_MAX, orient='horizontal')
-            self.scale.grid(row=0, column=0, sticky='ew')
-            # Writing on every step of a drag would flood the bus, so the value
-            # is only sent once the slider is let go of.
-            self.scale.bind('<ButtonRelease-1>', self._commit_brightness)
-            self.scale.configure(command=self._preview_brightness)
-            self.level = ttk.Label(row, text='-', font=self.app.small, width=5, anchor='e')
-            self.level.grid(row=0, column=1, padx=(6, 0))
-            self.shown.add(BRIGHTNESS_POINT)
-
-    def _preview_brightness(self, value: str) -> None:
-        """Show the value under the slider while it is being dragged."""
-        if self.level is not None:
-            self.level.configure(text=f'{round(float(value))}%')
-
-    def _commit_brightness(self, _event: tk.Event) -> None:
-        """Send the brightness the slider was left at."""
-        if self.scale is not None:
-            self.app.dim(self.device, int(round(self.scale.get() / BRIGHTNESS_STEP)
-                                          * BRIGHTNESS_STEP))
+            for icon, command in (
+                    ('\N{BLACK UP-POINTING TRIANGLE}', lambda: self.app.move(self.device, False)),
+                    ('\N{BLACK SQUARE}', lambda: self.app.stop(self.device)),
+                    ('\N{BLACK DOWN-POINTING TRIANGLE}', lambda: self.app.move(self.device, True))):
+                ttk.Button(parent, text=icon, width=3, command=command).pack(side='left', padx=2)
+            self.shown.add(COVER_POINT)
 
     def refresh(self, values: dict[str, str]) -> None:
         """Update the controls and the status line from the current values."""
         parts = []
         for point in self.device.usable_points:
             value = values.get(str(point.point_id))
-            if point.name == SWITCH_POINT:
-                for on, button in self.switches.items():
-                    selected = value == ('1' if on else '0')
-                    button.configure(style=('On.TButton' if on else 'Off.TButton')
-                                     if selected else 'TButton')
-            if point.name == BRIGHTNESS_POINT and self.scale is not None:
-                self.app.without_commit(self.scale, _number(value))
-                if self.level is not None:
-                    self.level.configure(text=_readable(point.name, value))
+            if point.name == SWITCH_POINT and self.light is not None:
+                self.light.show_state({'1': True, '0': False}.get(str(value)))
+            if point.name == BRIGHTNESS_POINT and self.light is not None:
+                self.light.show_level(None if value in (None, '', 'None') else _number(value))
             if point.name not in TRIGGER_POINTS and point.name not in self.shown:
                 parts.append(f'{point.name} {_readable(point.name, value)}')
         if parts or not self.device.usable_points:
@@ -196,6 +188,133 @@ class DeviceTile(ttk.Frame):
             self.status.grid()
         else:
             self.status.grid_remove()
+
+
+class LightSwitch(tk.Canvas):
+    """A round button switching a light, ringed by its brightness if it is dimmable.
+
+    Clicking the button switches the light.  Pressing on the ring, or dragging
+    along it, chooses a brightness, which is only sent once the mouse button is
+    let go of: writing on every step of a drag would flood the bus.
+    """
+
+    def __init__(self, master: tk.Misc, app: 'Application', switchable: bool, dimmable: bool,
+                 on_switch: Callable[[bool], None], on_dim: Callable[[int], None]) -> None:
+        """Draw the switch, with the brightness ring if the light is dimmable."""
+        background = ttk.Style(master).lookup('TFrame', 'background') or 'white'
+        super().__init__(master, width=SWITCH_SIZE, height=SWITCH_SIZE, background=background,
+                         highlightthickness=0, cursor='hand2')
+        self.switchable = switchable
+        self.dimmable = dimmable
+        self.on_switch = on_switch
+        self.on_dim = on_dim
+        self.lit: bool | None = None
+        self.level: int | None = None
+        # What the mouse button went down on: the button, the ring or nothing.
+        self.grabbed: str | None = None
+
+        middle = SWITCH_SIZE / 2
+        if dimmable:
+            ring = (middle - RING_RADIUS, middle - RING_RADIUS,
+                    middle + RING_RADIUS, middle + RING_RADIUS)
+            self.create_arc(*ring, start=RING_START - RING_SPAN, extent=RING_SPAN,
+                            style='arc', width=RING_WIDTH, outline=RING_TRACK)
+            self.ring = self.create_arc(*ring, start=RING_START, extent=0, style='arc',
+                                        width=RING_WIDTH, outline=RING_LEVEL, state='hidden')
+            # The percentage sits in the gap the ring leaves at the bottom.
+            self.percent = self.create_text(middle, middle + RING_RADIUS - 2, text='?',
+                                            font=app.small, fill='grey30')
+        self.button = self.create_oval(middle - SWITCH_RADIUS, middle - SWITCH_RADIUS,
+                                       middle + SWITCH_RADIUS, middle + SWITCH_RADIUS,
+                                       outline='', fill=SWITCH_UNKNOWN)
+        self.label = self.create_text(middle, middle, text='?', font=app.bold, fill='white')
+
+        self.bind('<ButtonPress-1>', self._press)
+        self.bind('<B1-Motion>', self._drag)
+        self.bind('<ButtonRelease-1>', self._release)
+
+    def show_state(self, on: bool | None) -> None:
+        """Show whether the light is on, off or in an unknown state."""
+        self.lit = on
+        self._paint()
+
+    def show_level(self, percent: int | None) -> None:
+        """Show the brightness, unless the user is choosing one right now."""
+        if self.grabbed != 'ring':
+            self._show_level(percent)
+
+    def _show_level(self, percent: int | None) -> None:
+        """Draw the ring and the percentage for a brightness."""
+        if not self.dimmable:
+            return
+        self.level = percent
+        if percent is None or percent <= 0:
+            self.itemconfigure(self.ring, state='hidden')
+        else:
+            self.itemconfigure(self.ring, state='normal',
+                               extent=-RING_SPAN * min(percent, BRIGHTNESS_MAX) / BRIGHTNESS_MAX)
+        self.itemconfigure(self.percent, text='?' if percent is None else f'{percent}%')
+        if not self.switchable:
+            self._paint()
+
+    def _paint(self, pressed: bool = False) -> None:
+        """Colour the button after the state of the light."""
+        state = self.lit
+        if not self.switchable and self.level is not None:
+            # Without a switch the brightness alone says whether the light is on.
+            state = self.level > 0
+        colours = {True: (SWITCH_ON, SWITCH_ON_PRESSED, 'On'),
+                   False: (SWITCH_OFF, SWITCH_OFF_PRESSED, 'Off'),
+                   None: (SWITCH_UNKNOWN, SWITCH_UNKNOWN_PRESSED, '?')}
+        normal, darker, text = colours[state]
+        self.itemconfigure(self.button, fill=darker if pressed else normal)
+        self.itemconfigure(self.label, text=text)
+
+    def _where(self, event: tk.Event) -> tuple[float, float]:
+        """Return the distance of the pointer from the middle and its angle."""
+        dx = event.x - SWITCH_SIZE / 2
+        dy = SWITCH_SIZE / 2 - event.y
+        return math.hypot(dx, dy), math.degrees(math.atan2(dy, dx))
+
+    def _percent(self, angle: float) -> int:
+        """Convert an angle on the ring to a brightness in whole steps.
+
+        A point in the gap at the bottom counts as the end of the ring nearer to it.
+        """
+        along = (RING_START - angle) % 360
+        if along > RING_SPAN:
+            along = RING_SPAN if along < (RING_SPAN + 360) / 2 else 0
+        percent = along / RING_SPAN * BRIGHTNESS_MAX
+        return int(round(percent / BRIGHTNESS_STEP) * BRIGHTNESS_STEP)
+
+    def _press(self, event: tk.Event) -> None:
+        """Note whether the button or the ring was pressed."""
+        distance, angle = self._where(event)
+        if distance <= SWITCH_RADIUS and self.switchable:
+            self.grabbed = 'button'
+            self._paint(pressed=True)
+        elif self.dimmable and abs(distance - RING_RADIUS) <= RING_WIDTH:
+            self.grabbed = 'ring'
+            self._show_level(self._percent(angle))
+        else:
+            self.grabbed = None
+
+    def _drag(self, event: tk.Event) -> None:
+        """Follow the pointer along the ring."""
+        if self.grabbed == 'ring':
+            self._show_level(self._percent(self._where(event)[1]))
+        elif self.grabbed == 'button':
+            self._paint(pressed=self._where(event)[0] <= SWITCH_RADIUS)
+
+    def _release(self, event: tk.Event) -> None:
+        """Switch the light, or send the brightness chosen on the ring."""
+        grabbed, self.grabbed = self.grabbed, None
+        if grabbed == 'button':
+            self._paint()
+            if self._where(event)[0] <= SWITCH_RADIUS:
+                self.on_switch(not self.lit)
+        elif grabbed == 'ring' and self.level is not None:
+            self.on_dim(self.level)
 
 
 class Application(tk.Tk):
@@ -209,6 +328,16 @@ class Application(tk.Tk):
         self.values: dict[str, str] = {}
         self.timers: dict[int, Timer | None] = {}
         self.tiles: list[DeviceTile] = []
+        # The rows of tiles on every page of a room, the page shown and the
+        # widgets to turn pages.  Without a room on display there is no pager.
+        self.pages: list[list[int]] = []
+        self.page = 0
+        self.header: ttk.Frame | None = None
+        self.pager: ttk.Frame | None = None
+        self.page_label: ttk.Label | None = None
+        self.previous_page: ttk.Button | None = None
+        self.next_page: ttk.Button | None = None
+        self.paging = False
 
         self.title('Gira X1')
         self.geometry('960x680')
@@ -220,20 +349,18 @@ class Application(tk.Tk):
         self.small = self.normal.copy()
         self.small.configure(size=max(self.normal.cget('size') - 2, 7))
 
-        # The button for the state a device is in stands out from the other,
-        # green when it is on and red when it is off.
-        style = ttk.Style(self)
-        for name, normal, active in (('On', '#2e7d32', '#388e3c'),
-                                     ('Off', '#c62828', '#d32f2f')):
-            style.configure(f'{name}.TButton', font=self.bold, foreground='white',
-                            background=normal)
-            style.map(f'{name}.TButton', background=[('active', active)],
-                      foreground=[('active', 'white')])
-
-        self.body = ttk.Frame(self, padding=12)
-        self.body.pack(fill='both', expand=True)
+        # The status line is packed first so that the body cannot push it out
+        # of the window; the body gets what is left, which paging relies on.
         self.message = ttk.Label(self, text='', font=self.small, anchor='w', padding=(12, 4))
         self.message.pack(fill='x', side='bottom')
+        self.body = ttk.Frame(self, padding=BODY_PADDING)
+        self.body.pack(fill='both', expand=True)
+        self.body.bind('<Configure>', lambda _: self._repaginate_soon())
+        self.bind('<Prior>', lambda _: self.turn(-1))
+        self.bind('<Next>', lambda _: self.turn(1))
+        self.bind('<MouseWheel>', lambda e: self.turn(-1 if e.delta > 0 else 1))
+        self.bind('<Button-4>', lambda _: self.turn(-1))
+        self.bind('<Button-5>', lambda _: self.turn(1))
 
         self.rooms = self._rooms()
         self.reload_values()
@@ -246,20 +373,25 @@ class Application(tk.Tk):
         """Show one tile per room."""
         self.tiles = []
         self._clear()
+        self.header = self.pager = None
+        self.pages = []
         ttk.Label(self.body, text='Rooms', font=self.bold).grid(row=0, column=0,
                                                                 columnspan=ROOM_COLUMNS,
                                                                 sticky='w', pady=(0, 10))
+        background = ttk.Style(self).lookup('TFrame', 'background') or 'white'
         for index, (name, devices) in enumerate(self.rooms):
-            tile = ttk.Frame(self.body, padding=16, relief='ridge', borderwidth=1)
+            # Clicking anywhere on the tile opens the room.
+            tile = tk.Frame(self.body, background=background, relief='ridge', borderwidth=1,
+                            padx=16, pady=16, cursor='hand2', takefocus=True,
+                            highlightthickness=1)
             tile.grid(row=1 + index // ROOM_COLUMNS, column=index % ROOM_COLUMNS,
-                      sticky='nsew', padx=6, pady=6)
-            ttk.Label(tile, text=name, font=self.bold).pack(anchor='w')
-            ttk.Label(tile, text=f'{len(devices)} device' + ('' if len(devices) == 1 else 's'),
-                      font=self.small, foreground='grey40').pack(anchor='w')
-            ttk.Label(tile, text=self._summary(devices), font=self.small).pack(anchor='w',
-                                                                              pady=(6, 0))
-            ttk.Button(tile, text='Open',
-                       command=lambda n=name: self.show_room(n)).pack(anchor='w', pady=(10, 0))
+                      sticky='nsew', padx=TILE_GAP, pady=TILE_GAP)
+            tk.Label(tile, text=name, font=self.bold, background=background).pack(anchor='w')
+            tk.Label(tile, text=f'{len(devices)} device' + ('' if len(devices) == 1 else 's'),
+                     font=self.small, foreground='grey40', background=background).pack(anchor='w')
+            tk.Label(tile, text=self._summary(devices), font=self.small,
+                     background=background).pack(anchor='w', pady=(6, 0))
+            _clickable(tile, lambda n=name: self.show_room(n), background)
         for column in range(ROOM_COLUMNS):
             self.body.columnconfigure(column, weight=1)
 
@@ -270,16 +402,29 @@ class Application(tk.Tk):
         self.tiles = []
         self._clear()
 
-        header = ttk.Frame(self.body)
-        header.grid(row=0, column=0, columnspan=DEVICE_COLUMNS, sticky='ew', pady=(0, 10))
-        ttk.Button(header, text='\N{LEFTWARDS ARROW} Rooms',
+        self.header = ttk.Frame(self.body)
+        self.header.grid(row=0, column=0, columnspan=DEVICE_COLUMNS, sticky='ew',
+                         pady=(0, PAGE_HEADER_GAP))
+        ttk.Button(self.header, text='\N{LEFTWARDS ARROW} Rooms',
                    command=self.show_rooms).pack(side='left')
-        ttk.Label(header, text=name, font=self.bold).pack(side='left', padx=(12, 0))
+        ttk.Label(self.header, text=name, font=self.bold).pack(side='left', padx=(12, 0))
+
+        # Shown only when the tiles need more than one page.
+        self.pager = ttk.Frame(self.header)
+        self.previous_page = ttk.Button(self.pager, text='\N{BLACK LEFT-POINTING TRIANGLE}',
+                                        width=3, command=lambda: self.turn(-1))
+        self.previous_page.pack(side='left')
+        self.page_label = ttk.Label(self.pager, text='', width=7, anchor='center')
+        self.page_label.pack(side='left', padx=4)
+        self.next_page = ttk.Button(self.pager, text='\N{BLACK RIGHT-POINTING TRIANGLE}',
+                                    width=3, command=lambda: self.turn(1))
+        self.next_page.pack(side='left')
+        self.pages = []
+        self.page = 0
 
         for index, device in enumerate(devices):
             tile = DeviceTile(self.body, self, device, self.timers.get(device.view_id))
-            tile.grid(row=1 + index // DEVICE_COLUMNS, column=index % DEVICE_COLUMNS,
-                      sticky='nsew', padx=6, pady=6)
+            tile.row, tile.column = divmod(index, DEVICE_COLUMNS)
             self.tiles.append(tile)
         for column in range(DEVICE_COLUMNS):
             self.body.columnconfigure(column, weight=1)
@@ -346,18 +491,91 @@ class Application(tk.Tk):
         """Update every visible tile."""
         for tile in self.tiles:
             tile.refresh(self.values)
+        self._align()
+
+    def _align(self) -> None:
+        """Let the switch times of all tiles in a row start at the same height."""
+        self.update_idletasks()
+        for tiles in self._rows().values():
+            height = max(tile.top.winfo_reqheight() for tile in tiles)
+            for tile in tiles:
+                tile.align(height)
+        self._repaginate()
+
+    def _rows(self) -> dict[int, list['DeviceTile']]:
+        """Return the tiles of the room shown, by row."""
+        rows: dict[int, list[DeviceTile]] = {}
+        for tile in self.tiles:
+            rows.setdefault(tile.row, []).append(tile)
+        return rows
+
+    # ----------------------------------------------------------------- paging
+
+    def turn(self, step: int) -> None:
+        """Show the next or the previous page of the room."""
+        if self.pager is None or not 0 <= self.page + step < len(self.pages):
+            return
+        self.page += step
+        self._show_page()
+
+    def _repaginate_soon(self) -> None:
+        """Repaginate once the window has settled after a change of size."""
+        if not self.paging:
+            self.paging = True
+            self.after_idle(self._repaginate)
+
+    def _repaginate(self) -> None:
+        """Split the rows of tiles into pages that fit the body of the window.
+
+        The page shown afterwards is the one holding the row that was on top
+        before, so that changing the size of the window does not lose the place.
+        """
+        self.paging = False
+        if self.header is None:
+            return
+        self.update_idletasks()
+        available = (self.body.winfo_height() - 2 * BODY_PADDING
+                     - self.header.winfo_reqheight() - PAGE_HEADER_GAP)
+        pages: list[list[int]] = []
+        used = 0
+        for row, tiles in sorted(self._rows().items()):
+            height = max(tile.winfo_reqheight() for tile in tiles) + 2 * TILE_GAP
+            # A row too tall for any page still gets one of its own.
+            if pages and used + height <= available:
+                pages[-1].append(row)
+                used += height
+            else:
+                pages.append([row])
+                used = height
+        top = self.pages[self.page][0] if self.pages else 0
+        self.pages = pages or [[]]
+        self.page = next((i for i, rows in enumerate(self.pages) if top in rows), 0)
+        self._show_page()
+
+    def _show_page(self) -> None:
+        """Lay out the tiles of the current page and update the pager."""
+        rows = self.pages[self.page]
+        for tile in self.tiles:
+            if tile.row in rows:
+                tile.grid(row=1 + tile.row - rows[0], column=tile.column, sticky='nsew',
+                          padx=TILE_GAP, pady=TILE_GAP)
+            else:
+                tile.grid_remove()
+        if self.pager is None or self.page_label is None:
+            return
+        if len(self.pages) > 1:
+            self.page_label.configure(text=f'{self.page + 1} / {len(self.pages)}')
+            if self.previous_page is not None and self.next_page is not None:
+                self.previous_page.state(['!disabled'] if self.page > 0 else ['disabled'])
+                self.next_page.state(['!disabled'] if self.page < len(self.pages) - 1
+                                     else ['disabled'])
+            self.pager.pack(side='right')
+        else:
+            self.pager.pack_forget()
 
     def note(self, text: str) -> None:
         """Show a message in the status line."""
         self.message.configure(text=text)
-
-    def without_commit(self, scale: ttk.Scale, value: float) -> None:
-        """Move a slider to follow the device.
-
-        Only letting go of the slider writes a value, so moving it here cannot
-        be mistaken for the user choosing one.
-        """
-        scale.set(value)
 
     def _pump(self) -> None:
         """Take the events the device pushed and update the display."""
@@ -626,6 +844,26 @@ class TimeEditor(tk.Toplevel):
             return
         self.owner.show(timer, index)
         self.destroy()
+
+
+def _clickable(area: tk.Frame, command: Callable[[], object], background: str) -> None:
+    """Run a command when an area is clicked anywhere, including on the text in it.
+
+    The area is shaded while the pointer is over it, and the keyboard can
+    activate it too once it has the focus.
+    """
+    widgets = (area, *area.winfo_children())
+
+    def shade(inside: bool) -> None:
+        for widget in widgets:
+            widget.configure(background=HOVER_BACKGROUND if inside else background)
+
+    for widget in widgets:
+        widget.bind('<Button-1>', lambda _: command())
+        widget.bind('<Enter>', lambda _: shade(True))
+        widget.bind('<Leave>', lambda _: shade(False))
+    area.bind('<Return>', lambda _: command())
+    area.bind('<space>', lambda _: command())
 
 
 def _what(timer: Timer, entry: SwitchTime, project: Project, device: Device) -> str:
