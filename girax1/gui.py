@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import girax1
-from . import appearance, config, schedule, sunset
+from . import appearance, config, schedule, sunset, x11
 from .appearance import Palette
 from .project import (BRIGHTNESS_POINT, COVER_POINT, STOP_POINT, SWITCH_POINT, Device,
                       Project)
@@ -890,7 +890,6 @@ class AboutDialog(tk.Toplevel):
         """Open the window."""
         super().__init__(app)
         self.title('About')
-        self.transient(app)
         self.resizable(False, False)
 
         body = ttk.Frame(self, padding=20)
@@ -945,8 +944,7 @@ class AboutDialog(tk.Toplevel):
         self.bind('<Escape>', lambda _: self.destroy())
         self.bind('<Return>', lambda _: self.destroy())
 
-        self.wait_visibility()
-        self.grab_set()
+        _make_modal(self, app)
         close.focus_set()
 
     def _toggle_license(self) -> None:
@@ -1305,7 +1303,6 @@ class TimesDialog(tk.Toplevel):
         self.device = device
         self.timer: Timer | None = None
         self.title(f'{device.name} \N{EN DASH} switch times')
-        self.transient(app)
 
         body = ttk.Frame(self, padding=12)
         body.pack(fill='both', expand=True)
@@ -1337,6 +1334,7 @@ class TimesDialog(tk.Toplevel):
         self.bind('<Escape>', lambda _: self.destroy())
 
         self._load()
+        _make_modal(self, app)
 
     def _load(self) -> None:
         """Read the programming from the device and show it."""
@@ -1484,7 +1482,6 @@ class TimeEditor(tk.Toplevel):
         self.device = device
         self.entry = entry
         self.title('Change switch time' if entry is not None else 'New switch time')
-        self.transient(owner)
         self.resizable(False, False)
 
         body = ttk.Frame(self, padding=12)
@@ -1613,8 +1610,7 @@ class TimeEditor(tk.Toplevel):
         self.bind('<Escape>', lambda _: self.destroy())
 
         self._show_mode()
-        self.wait_visibility()
-        self.grab_set()
+        _make_modal(self, owner)
         self.hour.focus_set()
 
     def _event(self) -> str:
@@ -1763,6 +1759,36 @@ class TimeEditor(tk.Toplevel):
         if (source := self.owner.app.stack.config.source) is None:
             raise sunset.SunsetError('the settings did not come from a file')
         return source
+
+
+def _make_modal(dialog: tk.Toplevel, parent: tk.Misc) -> None:
+    """Make a dialog modal, so that its parent and all windows below it take no input.
+
+    The dialog stays above its parent and is marked as a modal dialog for the
+    window manager, which then may attach it to the parent so that both move
+    together, as GNOME does.  Tk does not nest grabs, so when the dialog is
+    closed the grab goes back to the parent if that is a dialog itself, and so
+    does the keyboard focus.
+    """
+    dialog.transient(parent)
+    try:
+        # Only X11 knows window types; elsewhere being transient suffices.
+        dialog.attributes('-type', 'dialog')
+    except tk.TclError:
+        pass
+    dialog.wait_visibility()
+    dialog.grab_set()
+    x11.mark_modal(dialog)
+
+    def closed(event: tk.Event) -> None:
+        # Children of the dialog report their destruction here as well.
+        if event.widget is not dialog or not parent.winfo_exists():
+            return
+        if isinstance(parent, tk.Toplevel):
+            parent.grab_set()
+        parent.focus_set()
+
+    dialog.bind('<Destroy>', closed, add='+')
 
 
 def _sunset_mark(link: sunset.Link | None) -> str:
