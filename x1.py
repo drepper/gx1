@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Text based program to control a Gira X1.
+"""Program to control a Gira X1, from the command line or a graphical interface.
 
-The first argument is the command to carry out.  The project configuration,
+The first argument is the command to carry out.  Without one the graphical
+interface is shown, as the gui command does.  The project configuration,
 which holds the names of all devices, is downloaded from the X1 at start-up so
 that every command can address devices by name.
 
 Devices are addressed by a path made of the room they sit in, a slash and the
 device name, for example ``Flur/Deckenlampen Flur``.
 
+    x1.py                           show the graphical interface
     x1.py list                      list all devices and the available groupings
     x1.py list --by location        list the devices grouped by location
     x1.py status                    show the status of every device
@@ -46,7 +48,9 @@ def main() -> int:
                         help=f'configuration file to use (default: {DEFAULT_CONFIG})')
     parser.add_argument('--version', action='version',
                         version=f'%(prog)s {girax1.__version__}')
-    commands = parser.add_subparsers(dest='command', required=True, metavar='COMMAND')
+    # Without a command the graphical interface is shown.
+    parser.set_defaults(run=command_gui)
+    commands = parser.add_subparsers(dest='command', metavar='COMMAND')
 
     listing = commands.add_parser('list', help='list the devices and the possible groupings')
     listing.add_argument('--by', dest='grouping', metavar='KIND',
