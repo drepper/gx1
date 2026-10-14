@@ -26,21 +26,12 @@ from pathlib import Path
 from typing import Callable
 
 import girax1
-from girax1.project import WILDCARDS, Device, Project
+from girax1 import schedule
+from girax1.project import (BRIGHTNESS_POINT, COVER_POINT, STOP_POINT, SWITCH_POINT, WILDCARDS,
+                            Device, Project)
 from girax1.stack import BRIGHTNESS_MAX, Stack
-from girax1.timer import WEEKDAYS, write_days
 
 DEFAULT_CONFIG = Path(os.environ.get('GIRAX1_CONFIG', '~/.config/girax1.toml'))
-
-# The data point that switching a device on and off writes to.
-SWITCH_POINT = 'OnOff'
-
-# The data points that drive and halt a covering.
-COVER_POINT = 'Up-Down'
-STOP_POINT = 'Step-Up-Down'
-
-# The data point holding the brightness of a dimmable light.
-BRIGHTNESS_POINT = 'Brightness'
 
 # German names of the grouping kinds, as the device itself presents them.
 GROUPING_LABELS = {'Trade': 'trade (Gewerk)', 'Location': 'location (Standort)',
@@ -182,130 +173,19 @@ def command_switch(stack: Stack, project: Project, args: argparse.Namespace) -> 
     return 1 if failed else 0
 
 
-DAY_NAMES = {name.lower(): index for index, name in enumerate(WEEKDAYS)}
-DAY_GROUPS = {'daily': set(range(7)), 'everyday': set(range(7)),
-              'weekdays': {0, 1, 2, 3, 4}, 'weekend': {5, 6}}
-
-
-def _days(text: str) -> set[int]:
-    """Parse a days specification such as ``Mon-Fri``, ``Mon,Wed`` or ``weekend``."""
-    if (group := DAY_GROUPS.get(text.lower())) is not None:
-        return set(group)
-    days: set[int] = set()
-    for part in text.split(','):
-        first, sep, last = part.strip().partition('-')
-        try:
-            start = DAY_NAMES[first.strip().lower()]
-            stop = DAY_NAMES[last.strip().lower()] if sep else start
-        except KeyError:
-            raise argparse.ArgumentTypeError(
-                f'{part.strip()!r} is not a day; use names such as Mon or a range Mon-Fri') \
-                from None
-        days.update(range(start, stop + 1) if start <= stop
-                    else list(range(start, 7)) + list(range(0, stop + 1)))
-    return days
-
-
-def _time_of_day(text: str) -> str:
-    """Normalise a time of day to the HH:MM:SS the device stores."""
-    parts = text.split(':')
-    if not 2 <= len(parts) <= 3 or not all(p.isdigit() for p in parts):
-        raise argparse.ArgumentTypeError(f'{text!r} is not a time of day such as 06:30')
-    hour, minute = int(parts[0]), int(parts[1])
-    second = int(parts[2]) if len(parts) == 3 else 0
-    if not (0 <= hour < 24 and 0 <= minute < 60 and 0 <= second < 60):
-        raise argparse.ArgumentTypeError(f'{text!r} is not a valid time of day')
-    return f'{hour:02d}:{minute:02d}:{second:02d}'
-
-
-# What each action writes, and the scenes to create when a channel has none.
-# The names follow the ones the Gira app itself uses.
-ACTIONS = {'on': (SWITCH_POINT, '1', 'switch'), 'off': (SWITCH_POINT, '0', 'switch'),
-           'up': (COVER_POINT, '0', 'move'), 'down': (COVER_POINT, '1', 'move')}
-DEFAULT_SCENES = {'switch': [(1, 'switch-1', '1'), (2, 'switch-0', '0')],
-                  'move': [(1, 'move-0', '0'), (2, 'move-1', '1')],
-                  'dim': [(i + 1, f'dim-{v}', str(v))
-                          for i, v in enumerate(range(0, BRIGHTNESS_MAX + 1, 10))]}
-
-
-def _action(device: Device, text: str) -> tuple[object, str, str]:
-    """Return the data point, the value and the scene family an action names."""
-    if (known := ACTIONS.get(text.lower())) is not None:
-        name, value, family = known
-    elif text.isdigit() and 0 <= int(text) <= BRIGHTNESS_MAX:
-        name, value, family = BRIGHTNESS_POINT, str(int(text)), 'dim'
-    else:
-        raise ValueError(f'{text!r} is not an action; use on, off, up, down '
-                         f'or a brightness from 0 to {BRIGHTNESS_MAX}')
-    point = device.point(name)
-    if point is None or not point.usable:
-        raise ValueError(f'a {device.kind} has no {name} data point, so it cannot do {text!r}')
-    return point, value, family
-
-
-def _same_value(one: str, other: str) -> bool:
-    """Compare two data point values, which the device may spell differently."""
-    try:
-        return int(float(one)) == int(float(other))
-    except (TypeError, ValueError):
-        return str(one) == str(other)
-
-
-def _scene_for(timer, point_id: int, value: str) -> int | None:
-    """Return the number of the scene writing this value, if one exists."""
-    for number, scene in sorted((timer.scenes or {}).items()):
-        if any(a.point_id == point_id and _same_value(a.value, value) for a in scene.actions):
-            return number
-    return None
-
-
 def command_addtime(stack: Stack, project: Project, args: argparse.Namespace) -> int:
     """Program a new switch time for one device."""
     device = _one(project, args.path)
     if device is None:
         return 1
-    if not device.timer_channel:
-        print(f'{project.path(device)} has no timer channel', file=sys.stderr)
-        return 1
     try:
-        point, value, family = _action(device, args.action)
-        when = _time_of_day(args.time)
-        days = write_days(_days(args.days))
-    except (ValueError, argparse.ArgumentTypeError) as e:
-        print(e, file=sys.stderr)
-        return 1
-
-    try:
-        timer = stack.timer(device.timer_channel)
-        scene = _scene_for(timer, point.point_id, value)
-        if scene is None:
-            if timer.scenes:
-                print(f'{project.path(device)}: no scene writes {args.action!r}; '
-                      f'the channel already has scenes, so none are created',
-                      file=sys.stderr)
-                return 1
-            # A channel without scenes gets the set the app would create for it.
-            stack.set_scene_set(device.timer_channel, point.point_id, DEFAULT_SCENES[family])
-            timer = stack.timer(device.timer_channel)
-            scene = _scene_for(timer, point.point_id, value)
-            if scene is None:
-                print(f'{project.path(device)}: the device did not take the scenes',
-                      file=sys.stderr)
-                return 1
-
-        index = max((e.index for e in timer.switch_times), default=0) + 1
-        stack.add_switch_time(device.timer_channel, index, time=when, weekdays=days,
-                              trigger_value=scene, active=args.active)
-        timer = stack.timer(device.timer_channel)
-    except (girax1.X1Error, TimeoutError) as e:
+        timer, index = schedule.add_time(stack, device, args.time, args.action,
+                                         schedule.parse_days(args.days), args.active)
+    except (ValueError, schedule.ScheduleError, girax1.X1Error, TimeoutError) as e:
         print(f'{project.path(device)}: {e}', file=sys.stderr)
         return 1
 
-    entry = next((e for e in timer.switch_times if e.index == index), None)
-    if entry is None:
-        print(f'{project.path(device)}: the device did not keep the new switch time',
-              file=sys.stderr)
-        return 1
+    entry = next(e for e in timer.switch_times if e.index == index)
     print(f'{project.path(device)}  {entry.index}  {entry.when}  {entry.days}  '
           f'{"on" if entry.active else "off"}  {_scene(project, timer, entry)}')
     return 0
@@ -316,22 +196,9 @@ def command_deltime(stack: Stack, project: Project, args: argparse.Namespace) ->
     device = _one(project, args.path)
     if device is None:
         return 1
-    if not device.timer_channel:
-        print(f'{project.path(device)} has no timer channel', file=sys.stderr)
-        return 1
     try:
-        timer = stack.timer(device.timer_channel)
-        if not any(e.index == args.index for e in timer.switch_times):
-            available = ', '.join(str(e.index) for e in timer.switch_times) or 'none'
-            print(f'{project.path(device)} has no switch time {args.index}; '
-                  f'programmed: {available}', file=sys.stderr)
-            return 1
-        stack.remove_switch_time(device.timer_channel, args.index)
-        timer = stack.timer(device.timer_channel)
-        # The app drops the scenes along with the last switch time that used them.
-        if not timer.switch_times and not args.keep_scenes:
-            stack.clear_scenes(device.timer_channel)
-    except (girax1.X1Error, TimeoutError) as e:
+        timer = schedule.remove_time(stack, device, args.index, args.keep_scenes)
+    except (schedule.ScheduleError, girax1.X1Error, TimeoutError) as e:
         print(f'{project.path(device)}: {e}', file=sys.stderr)
         return 1
 
@@ -358,37 +225,11 @@ def command_settime(stack: Stack, project: Project, args: argparse.Namespace) ->
     device = _one(project, args.path)
     if device is None:
         return 1
-    if not device.timer_channel:
-        print(f'{project.path(device)} has no timer channel', file=sys.stderr)
-        return 1
-
     try:
-        timer = stack.timer(device.timer_channel)
-    except (girax1.X1Error, TimeoutError) as e:
-        print(f'{project.path(device)}: {e}', file=sys.stderr)
-        return 1
-    if not any(e.index == args.index for e in timer.switch_times):
-        available = ', '.join(str(e.index) for e in timer.switch_times) or 'none'
-        print(f'{project.path(device)} has no switch time {args.index}; '
-              f'programmed: {available}', file=sys.stderr)
-        return 1
-
-    fields: dict[str, object] = {}
-    if args.time is not None:
-        fields['time'] = _time_of_day(args.time)
-        fields['timeType'] = 'pointInTime'
-    if args.days is not None:
-        fields['weekdays'] = write_days(_days(args.days))
-        fields['recurrence'] = 'daily'
-    if args.active is not None:
-        fields['active'] = 'true' if args.active else 'false'
-    if args.scene is not None:
-        fields['triggerValue'] = str(args.scene)
-
-    try:
-        stack.set_switch_time(device.timer_channel, args.index, **fields)
-        timer = stack.timer(device.timer_channel)
-    except (girax1.X1Error, TimeoutError) as e:
+        days = None if args.days is None else schedule.parse_days(args.days)
+        timer = schedule.change_time(stack, device, args.index, when=args.time, days=days,
+                                     active=args.active, scene=args.scene)
+    except (ValueError, schedule.ScheduleError, girax1.X1Error, TimeoutError) as e:
         print(f'{project.path(device)}: {e}', file=sys.stderr)
         return 1
 

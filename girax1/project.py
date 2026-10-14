@@ -19,6 +19,12 @@ ROOM_KIND = 'Location'
 # Characters that turn a device path into a pattern.
 WILDCARDS = '*?['
 
+# Data points the programs know how to present and drive.
+SWITCH_POINT = 'OnOff'
+BRIGHTNESS_POINT = 'Brightness'
+COVER_POINT = 'Up-Down'
+STOP_POINT = 'Step-Up-Down'
+
 
 @dataclass(frozen=True, slots=True)
 class DataPoint:

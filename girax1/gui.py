@@ -2,7 +2,8 @@
 
 The entry screen shows one tile per room.  Choosing a room shows one tile per
 device in it, with the current status, controls that suit the kind of device and
-the timer programming in small print.
+all its switch times.  Clicking on those opens a window in which they can be
+added, changed and removed.
 
 Tk is used because it is part of the standard library, which keeps the program
 free of a dependency just for the interface.
@@ -13,19 +14,15 @@ also follows changes made from a wall switch or from the Gira app.
 
 import tkinter as tk
 from tkinter import font as tkfont
-from tkinter import ttk
+from tkinter import messagebox, ttk
 from typing import Any
 
 import girax1
-from .project import Device, Project
+from . import schedule
+from .project import (BRIGHTNESS_POINT, COVER_POINT, STOP_POINT, SWITCH_POINT, Device,
+                      Project)
 from .stack import BRIGHTNESS_MAX, Stack
-from .timer import Timer
-
-# Data points the interface knows how to present.
-SWITCH_POINT = 'OnOff'
-BRIGHTNESS_POINT = 'Brightness'
-COVER_POINT = 'Up-Down'
-STOP_POINT = 'Step-Up-Down'
+from .timer import WEEKDAYS, SwitchTime, Timer
 
 # Data points that only ever carry a momentary command.  Their value says
 # nothing about the device, so the status line leaves them out.
@@ -36,7 +33,14 @@ ROOM_COLUMNS = 3
 BRIGHTNESS_STEP = 5
 POLL_INTERVAL_MS = 400
 POLL_TIMEOUT = 0.02
-TIMER_LINES = 3
+
+# Background of the switch times of a device, normally and under the pointer.
+TIMES_BACKGROUND = '#f4f4f4'
+TIMES_HOVER = '#e2e8f0'
+TIMES_SHOWN = 10
+
+# What can go wrong while programming a switch time.
+SCHEDULE_ERRORS = (ValueError, schedule.ScheduleError, girax1.X1Error, TimeoutError)
 
 # Devices not assigned to any room are collected under this heading.
 OTHER_ROOM = 'Elsewhere'
@@ -71,10 +75,63 @@ class DeviceTile(ttk.Frame):
         self.shown: set[str] = set()
         self._build_controls(controls)
 
-        text = _timer_text(timer, app.project)
-        if text:
-            ttk.Label(self, text=text, font=app.small, foreground='grey30',
-                      justify='left').grid(row=5, column=0, sticky='w', pady=(8, 0))
+        # The switch times, all of them, in an area that opens the window to
+        # change them when clicked.  The next time due is shown below it.
+        self.times: tk.Frame | None = None
+        self.next = ttk.Label(self, text='', font=app.small, foreground='grey30')
+        if device.timer_channel:
+            self.times = tk.Frame(self, background=TIMES_BACKGROUND, relief='groove',
+                                  borderwidth=2, padx=10, pady=10, cursor='hand2',
+                                  takefocus=True, highlightthickness=1)
+            self.times.grid(row=5, column=0, sticky='ew', pady=(8, 0))
+            self.times.bind('<Return>', self._open_times)
+            self.times.bind('<space>', self._open_times)
+            self.next.grid(row=6, column=0, sticky='w', pady=(4, 0))
+        self.show_timer(timer)
+
+    def show_timer(self, timer: Timer | None) -> None:
+        """Lay out the switch times and the next time due."""
+        if self.times is None:
+            return
+        for child in self.times.winfo_children():
+            child.destroy()
+        rows = [] if timer is None else [
+            (entry.when[:5], entry.days, _what(timer, entry, self.app.project, self.device),
+             '' if entry.active else 'inactive')
+            for entry in sorted(timer.switch_times, key=lambda e: e.time)]
+        if not rows:
+            tk.Label(self.times, text='No switch times', font=self.app.normal,
+                     foreground='grey30', background=TIMES_BACKGROUND).grid(row=0, column=0,
+                                                                            sticky='w')
+        for row, cells in enumerate(rows):
+            for column, text in enumerate(cells):
+                tk.Label(self.times, text=text, font=self.app.small,
+                         foreground='grey50' if cells[-1] else 'black',
+                         background=TIMES_BACKGROUND).grid(row=row, column=column, sticky='w',
+                                                           padx=(0, 10))
+        # A click anywhere in the area counts, including on the text in it.
+        for widget in (self.times, *self.times.winfo_children()):
+            widget.bind('<Button-1>', self._open_times)
+            widget.bind('<Enter>', lambda _: self._hover(True))
+            widget.bind('<Leave>', lambda _: self._hover(False))
+
+        if timer is not None and timer.next_trigger:
+            self.next.configure(text=f'next {timer.next_trigger[:16]}')
+            self.next.grid()
+        else:
+            self.next.grid_remove()
+
+    def _hover(self, inside: bool) -> None:
+        """Shade the switch times while the pointer is over them."""
+        if self.times is None:
+            return
+        colour = TIMES_HOVER if inside else TIMES_BACKGROUND
+        for widget in (self.times, *self.times.winfo_children()):
+            widget.configure(background=colour)
+
+    def _open_times(self, _event: tk.Event) -> None:
+        """Open the window to change the switch times."""
+        TimesDialog(self.app, self.device)
 
     def _build_controls(self, parent: ttk.Frame) -> None:
         """Add the buttons and sliders that suit this kind of device."""
@@ -253,6 +310,13 @@ class Application(tk.Tk):
         """Set the brightness of a light."""
         self._write(device, BRIGHTNESS_POINT, lambda i: self.stack.dim(i, percent))
 
+    def update_timer(self, device: Device, timer: Timer) -> None:
+        """Remember timer programming read back after a change and show it."""
+        self.timers[device.view_id] = timer
+        for tile in self.tiles:
+            if tile.device.view_id == device.view_id:
+                tile.show_timer(timer)
+
     def _write(self, device: Device, point_name: str, action) -> None:
         """Run one write, reporting a refusal instead of letting it escape."""
         point = device.point(point_name)
@@ -345,25 +409,233 @@ class Application(tk.Tk):
                 self.timers[device.view_id] = None
 
 
-def _timer_text(timer: Timer | None, project: Project) -> str:
-    """Render the timer programming as a few lines of small print."""
-    if timer is None or not timer.switch_times:
-        return ''
-    lines = []
-    for entry in timer.switch_times[:TIMER_LINES]:
-        scene = timer.scene(entry)
-        if scene is None:
-            what = f'scene {entry.trigger_value}'
+class TimesDialog(tk.Toplevel):
+    """The switch times of one device, with the means to change them."""
+
+    def __init__(self, app: 'Application', device: Device) -> None:
+        """Open the window and read the current programming."""
+        super().__init__(app)
+        self.app = app
+        self.device = device
+        self.timer: Timer | None = None
+        self.title(f'{device.name} \N{EN DASH} switch times')
+        self.transient(app)
+
+        body = ttk.Frame(self, padding=12)
+        body.pack(fill='both', expand=True)
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(1, weight=1)
+        ttk.Label(body, text=device.name, font=app.bold).grid(row=0, column=0, sticky='w')
+
+        self.table = ttk.Treeview(body, columns=('time', 'days', 'action', 'active'),
+                                  show='headings', selectmode='browse', height=TIMES_SHOWN)
+        for column, heading, width in (('time', 'Time', 80), ('days', 'Days', 160),
+                                       ('action', 'Action', 120), ('active', 'Active', 70)):
+            self.table.heading(column, text=heading, anchor='w')
+            self.table.column(column, width=width, anchor='w')
+        self.table.grid(row=1, column=0, sticky='nsew', pady=(8, 0))
+        self.table.bind('<Double-1>', lambda _: self._edit())
+        self.table.bind('<<TreeviewSelect>>', lambda _: self._enable())
+
+        self.next = ttk.Label(body, text='', font=app.small, foreground='grey30')
+        self.next.grid(row=2, column=0, sticky='w', pady=(4, 0))
+
+        buttons = ttk.Frame(body)
+        buttons.grid(row=3, column=0, sticky='ew', pady=(10, 0))
+        ttk.Button(buttons, text='Add\N{HORIZONTAL ELLIPSIS}', command=self._add).pack(side='left')
+        self.edit = ttk.Button(buttons, text='Edit\N{HORIZONTAL ELLIPSIS}', command=self._edit)
+        self.edit.pack(side='left', padx=(4, 0))
+        self.remove = ttk.Button(buttons, text='Remove', command=self._remove)
+        self.remove.pack(side='left', padx=(4, 0))
+        ttk.Button(buttons, text='Close', command=self.destroy).pack(side='right')
+        self.bind('<Escape>', lambda _: self.destroy())
+
+        self._load()
+
+    def _load(self) -> None:
+        """Read the programming from the device and show it."""
+        try:
+            self.show(self.app.stack.timer(self.device.timer_channel))
+        except (girax1.X1Error, TimeoutError) as e:
+            messagebox.showerror('Switch times', f'cannot read the switch times: {e}',
+                                 parent=self)
+
+    def show(self, timer: Timer, select: int | None = None) -> None:
+        """Fill the table from timer programming, keeping a row selected."""
+        self.timer = timer
+        self.app.update_timer(self.device, timer)
+        if select is None and (chosen := self.table.selection()):
+            select = int(chosen[0])
+        self.table.delete(*self.table.get_children())
+        for entry in sorted(timer.switch_times, key=lambda e: e.time):
+            self.table.insert('', 'end', iid=str(entry.index),
+                              values=(entry.when[:5], entry.days,
+                                      _what(timer, entry, self.app.project, self.device),
+                                      'yes' if entry.active else 'no'))
+        if select is not None and self.table.exists(str(select)):
+            self.table.selection_set(str(select))
+            self.table.see(str(select))
+        self.next.configure(text=f'next {timer.next_trigger[:16]}' if timer.next_trigger
+                            else 'nothing due')
+        self._enable()
+
+    def _enable(self) -> None:
+        """Allow editing and removing only while a switch time is selected."""
+        state = ['!disabled'] if self.table.selection() else ['disabled']
+        self.edit.state(state)
+        self.remove.state(state)
+
+    def _selected(self) -> SwitchTime | None:
+        """Return the selected switch time."""
+        if self.timer is None or not (chosen := self.table.selection()):
+            return None
+        return next((e for e in self.timer.switch_times if e.index == int(chosen[0])), None)
+
+    def _add(self) -> None:
+        """Ask for a new switch time and program it."""
+        if self.timer is not None:
+            TimeEditor(self, self.device, self.timer, None)
+
+    def _edit(self) -> None:
+        """Ask for changes to the selected switch time and program them."""
+        if self.timer is not None and (entry := self._selected()) is not None:
+            TimeEditor(self, self.device, self.timer, entry)
+
+    def _remove(self) -> None:
+        """Delete the selected switch time after asking whether that is meant."""
+        if (entry := self._selected()) is None:
+            return
+        if not messagebox.askyesno('Remove switch time',
+                                   f'Remove the switch time at {entry.when[:5]} '
+                                   f'on {entry.days}?', parent=self):
+            return
+        try:
+            self.show(schedule.remove_time(self.app.stack, self.device, entry.index))
+        except SCHEDULE_ERRORS as e:
+            messagebox.showerror('Remove switch time', str(e), parent=self)
+
+
+class TimeEditor(tk.Toplevel):
+    """Asks for the details of a new switch time or for changes to one."""
+
+    def __init__(self, owner: TimesDialog, device: Device, timer: Timer,
+                 entry: SwitchTime | None) -> None:
+        """Open the window, filled in from the switch time to change if there is one."""
+        super().__init__(owner)
+        self.owner = owner
+        self.device = device
+        self.entry = entry
+        self.title('Change switch time' if entry is not None else 'New switch time')
+        self.transient(owner)
+        self.resizable(False, False)
+
+        body = ttk.Frame(self, padding=12)
+        body.pack(fill='both', expand=True)
+
+        hour, minute = (entry.time.split(':')[:2] if entry is not None and ':' in entry.time
+                        else ('07', '00'))
+        ttk.Label(body, text='Time').grid(row=0, column=0, sticky='w', pady=4)
+        clock = ttk.Frame(body)
+        clock.grid(row=0, column=1, sticky='w', pady=4)
+        self.hour = ttk.Spinbox(clock, from_=0, to=23, width=3, format='%02.0f', wrap=True)
+        self.hour.set(hour)
+        self.hour.pack(side='left')
+        ttk.Label(clock, text=':').pack(side='left', padx=2)
+        self.minute = ttk.Spinbox(clock, from_=0, to=59, width=3, format='%02.0f', wrap=True)
+        self.minute.set(minute)
+        self.minute.pack(side='left')
+        self.original_time = (hour, minute)
+
+        ttk.Label(body, text='Days').grid(row=1, column=0, sticky='nw', pady=4)
+        days = ttk.Frame(body)
+        days.grid(row=1, column=1, sticky='w', pady=4)
+        chosen = entry.day_numbers if entry is not None else set(range(len(WEEKDAYS)))
+        self.days = [tk.BooleanVar(self, value=i in chosen) for i in range(len(WEEKDAYS))]
+        for i, (name, var) in enumerate(zip(WEEKDAYS, self.days)):
+            ttk.Checkbutton(days, text=name, variable=var).grid(row=0, column=i, padx=(0, 4))
+        shortcuts = ttk.Frame(days)
+        shortcuts.grid(row=1, column=0, columnspan=len(WEEKDAYS), sticky='w', pady=(4, 0))
+        for text, group in (('Daily', 'daily'), ('Weekdays', 'weekdays'),
+                            ('Weekend', 'weekend')):
+            ttk.Button(shortcuts, text=text,
+                       command=lambda g=group: self._choose_days(schedule.DAY_GROUPS[g])
+                       ).pack(side='left', padx=(0, 4))
+
+        self.original_what = (schedule.describe(device, timer, entry.index)
+                              if entry is not None else None)
+        ttk.Label(body, text='Action').grid(row=2, column=0, sticky='w', pady=4)
+        offered = schedule.actions(device, timer)
+        self.what = ttk.Combobox(body, values=offered, width=12)
+        self.what.grid(row=2, column=1, sticky='w', pady=4)
+        if entry is None:
+            self.what.set(offered[0] if offered else '')
+        elif self.original_what is not None:
+            self.what.set(self.original_what)
         else:
-            what = ', '.join(_readable(project.point_kind(a.point_id), a.value)
-                             for a in scene.actions)
-        mark = '' if entry.active else '  (inactive)'
-        lines.append(f'{entry.time[:5]}  {entry.days}  {what}{mark}')
-    if len(timer.switch_times) > TIMER_LINES:
-        lines.append(f'... and {len(timer.switch_times) - TIMER_LINES} more')
-    if timer.next_trigger:
-        lines.append(f'next {timer.next_trigger[:16]}')
-    return '\n'.join(lines)
+            # A scene no single action describes stays as it is unless one is chosen.
+            self.what.set('')
+            ttk.Label(body, text=f'now: {_what(timer, entry, owner.app.project, device)}',
+                      font=owner.app.small, foreground='grey30').grid(row=3, column=1,
+                                                                      sticky='w')
+
+        self.active = tk.BooleanVar(self, value=entry.active if entry is not None else True)
+        ttk.Checkbutton(body, text='Active', variable=self.active).grid(row=4, column=1,
+                                                                        sticky='w', pady=4)
+
+        buttons = ttk.Frame(body)
+        buttons.grid(row=5, column=0, columnspan=2, sticky='e', pady=(10, 0))
+        ttk.Button(buttons, text='Cancel', command=self.destroy).pack(side='right')
+        ttk.Button(buttons, text='OK', command=self._apply).pack(side='right', padx=(0, 4))
+        self.bind('<Return>', lambda _: self._apply())
+        self.bind('<Escape>', lambda _: self.destroy())
+
+        self.wait_visibility()
+        self.grab_set()
+        self.hour.focus_set()
+
+    def _choose_days(self, days: set[int]) -> None:
+        """Tick exactly the given days."""
+        for i, var in enumerate(self.days):
+            var.set(i in days)
+
+    def _apply(self) -> None:
+        """Program what was entered and close, or explain why it cannot be done."""
+        days = {i for i, var in enumerate(self.days) if var.get()}
+        what = self.what.get().strip()
+        try:
+            if not days:
+                raise ValueError('choose at least one day')
+            when = schedule.parse_time(f'{self.hour.get()}:{self.minute.get()}')
+            app = self.owner.app
+            if self.entry is None:
+                if not what:
+                    raise ValueError('choose what the switch time does')
+                timer, index = schedule.add_time(app.stack, self.device, when, what, days,
+                                                 self.active.get())
+            else:
+                index = self.entry.index
+                timer = schedule.change_time(
+                    app.stack, self.device, index,
+                    when=None if (self.hour.get(), self.minute.get()) == self.original_time
+                    else when,
+                    days=None if days == self.entry.day_numbers else days,
+                    active=None if self.active.get() == self.entry.active else self.active.get(),
+                    what=None if not what or what == self.original_what else what)
+        except SCHEDULE_ERRORS as e:
+            messagebox.showerror(self.title(), str(e), parent=self)
+            return
+        self.owner.show(timer, index)
+        self.destroy()
+
+
+def _what(timer: Timer, entry: SwitchTime, project: Project, device: Device) -> str:
+    """Describe what a switch time does."""
+    if (what := schedule.describe(device, timer, entry.index)) is not None:
+        return what
+    if (scene := timer.scene(entry)) is None:
+        return f'scene {entry.trigger_value}'
+    return ', '.join(_readable(project.point_kind(a.point_id), a.value)
+                     for a in scene.actions) or f'scene {scene.number}'
 
 
 def _readable(name: str, value: Any) -> str:
