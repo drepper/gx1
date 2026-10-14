@@ -44,6 +44,8 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('-c', '--config', type=Path, default=DEFAULT_CONFIG,
                         help=f'configuration file to use (default: {DEFAULT_CONFIG})')
+    parser.add_argument('--version', action='version',
+                        version=f'%(prog)s {girax1.__version__}')
     commands = parser.add_subparsers(dest='command', required=True, metavar='COMMAND')
 
     listing = commands.add_parser('list', help='list the devices and the possible groupings')
