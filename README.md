@@ -102,8 +102,9 @@ builds packages from the working tree, with the version defined in
 `girax1/__init__.py`; changes need not be committed first, but new files must
 not be ignored by git.  The results are in `build/rpm/RPMS/`:
 
-- `girax1` installs the program as `/usr/bin/x1` together with a desktop entry,
-  so the interface can be started from the desktop's application menu.
+- `girax1-x1` installs the program as `/usr/bin/x1` together with a desktop
+  entry, so the interface can be started from the desktop's application menu.
+- `girax1` holds this README and the license and pulls in `girax1-x1`.
 - `girax1-libs` holds the shared C++ library.
 - `girax1-devel` holds what is needed to build C++ programs with the library:
   the headers, the static library, the link to the shared one and a

@@ -7,14 +7,11 @@
 Name:           girax1
 Version:        @VERSION@
 Release:        1%{?dist}
-Summary:        Control a Gira X1 from the command line or a small GUI
+Summary:        Programs and libraries to control a Gira X1
 
 License:        CC-BY-NC-ND-4.0
 Source0:        %{name}-%{version}.tar.gz
 
-# The C++ library makes the build specific to the architecture.  RPM cannot
-# have the main package noarch while subpackages are not, so the x1 program
-# is built for an architecture as well, even though it is written in Python.
 BuildRequires:  python3-devel
 BuildRequires:  desktop-file-utils
 BuildRequires:  gcc-c++
@@ -23,6 +20,23 @@ BuildRequires:  pkgconfig(gnutls)
 BuildRequires:  pkgconfig(jsoncpp)
 BuildRequires:  tomlplusplus-devel
 
+# The program was part of this package up to version 0.2, so requiring its
+# package now keeps it installed across the upgrade.
+Requires:       %{name}-x1 = %{version}-%{release}
+
+%description
+Programs and libraries to control and query a Gira X1 home automation
+server over its Device Stack API.  This package holds the documentation and
+pulls in the x1 program.
+
+The C++ library makes the build specific to the architecture, and RPM cannot
+make the main package noarch while others are not.  This package therefore
+holds nothing but documentation, and the program, written in Python, is in
+the noarch package girax1-x1.
+
+%package x1
+Summary:        Control a Gira X1 from the command line or a small GUI
+BuildArch:      noarch
 # The type parameter syntax of generic functions needs Python 3.12.
 Requires:       python3 >= 3.12
 # Only the gui command needs Tk.
@@ -30,11 +44,12 @@ Recommends:     python3-tkinter
 # Owns the directories the icon is installed into.
 Requires:       hicolor-icon-theme
 
-%description
+%description x1
 The x1 program controls and queries a Gira X1 over its Device Stack API:
 switching and dimming lights, driving coverings, showing the status of
-devices and programming their switch times.  The connection details are
-read from ~/.config/girax1.toml.
+devices and programming their switch times, from the command line or from a
+graphical interface.  The connection details are read from
+~/.config/girax1.toml.
 
 %package libs
 Summary:        C++ library to control a Gira X1
@@ -85,7 +100,11 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/org.akkadia.girax1.de
 
 %files
 %license LICENSE
-%doc README.md girax1.toml.example
+%doc README.md
+
+%files x1
+%license LICENSE
+%doc girax1.toml.example
 %{_bindir}/x1
 %{_datadir}/%{name}
 %{_datadir}/applications/org.akkadia.girax1.desktop
@@ -103,6 +122,10 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/org.akkadia.girax1.de
 %{_libdir}/pkgconfig/girax1.pc
 
 %changelog
+* Wed Oct 14 2026 Ulrich Drepper <github@akkadia.org> - 0.3-1
+- Move the x1 program into the noarch package girax1-x1; girax1 only holds
+  the documentation and requires it.
+
 * Wed Oct 14 2026 Ulrich Drepper <github@akkadia.org> - 0.2-1
 - Add the C++ library in the libs and devel subpackages.
 
