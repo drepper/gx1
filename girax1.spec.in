@@ -16,8 +16,8 @@ BuildArch:      noarch
 BuildRequires:  python3-devel
 BuildRequires:  desktop-file-utils
 
-# tomllib and typing.Self are needed.
-Requires:       python3 >= 3.11
+# The type parameter syntax of generic functions needs Python 3.12.
+Requires:       python3 >= 3.12
 # Only the gui command needs Tk.
 Recommends:     python3-tkinter
 # Owns the directories the icon is installed into.
