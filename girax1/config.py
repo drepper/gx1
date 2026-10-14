@@ -4,6 +4,10 @@ The configuration is a TOML file.  It is never part of the repository since it
 contains the credentials of the X1 device.  See ``girax1.toml.example``.
 """
 
+import json
+import os
+import re
+import stat
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,6 +25,14 @@ DEFAULT_TRAVEL_SECONDS = 30.0
 # Where the travel times live in the configuration file.
 BLIND_SECTION = 'blinds'
 TRAVEL_TABLE = 'blinds.seconds'
+
+# The settings that can be edited, named as section.key, with the type of
+# their values.  The travel times of the blinds are kept up separately.
+SETTINGS: dict[str, type] = {
+    'device.host': str, 'device.port': int, 'device.timeout': float,
+    'auth.username': str, 'auth.password': str, 'auth.token': str, 'auth.client_id': str,
+    'tls.enabled': bool, 'tls.verify': bool, 'tls.ca_cert': str,
+}
 
 
 class ConfigError(Exception):
@@ -92,7 +104,11 @@ def load(filename: str | Path) -> Config:
         raise ConfigError(f'cannot read {source}: {e.strerror}') from e
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f'{source}: {e}') from e
+    return _parse(data, source)
 
+
+def _parse(data: dict[str, Any], source: Path) -> Config:
+    """Validate the parsed contents of a configuration file."""
     device = _section(data, 'device', source)
     auth = _section(data, 'auth', source)
     tls = _section(data, 'tls', source)
@@ -142,6 +158,103 @@ def load(filename: str | Path) -> Config:
                   source=source,
                   travel_default=travel_default,
                   travel=travel)
+
+
+def read_settings(source: Path) -> dict[str, Any]:
+    """Return the editable settings as the file has them, keyed as in :data:`SETTINGS`.
+
+    Settings the file leaves out are missing from the result, so that the
+    defaults stay apparent.
+    """
+    try:
+        with source.open('rb') as fp:
+            data = tomllib.load(fp)
+    except OSError as e:
+        raise ConfigError(f'cannot read {source}: {e.strerror}') from e
+    except tomllib.TOMLDecodeError as e:
+        raise ConfigError(f'{source}: {e}') from e
+    result = {}
+    for name in SETTINGS:
+        section, key = name.split('.')
+        if isinstance(table := data.get(section), dict) and key in table:
+            result[name] = table[key]
+    return result
+
+
+def write_settings(source: Path, changes: dict[str, Any]) -> Config:
+    """Change settings in the file and return the configuration as it is then.
+
+    ``changes`` is keyed as :data:`SETTINGS`; a value of None removes the
+    setting so that its default applies.  The file is edited as text rather
+    than rewritten from the parsed data, so that comments and layout survive.
+    A setting the file only has commented out is filled in where that comment
+    is.  The result is checked before it replaces the file, which is left
+    alone when the settings would not be valid, and keeps its permissions.
+    """
+    text = source.read_text(encoding='utf-8')
+    for name, value in changes.items():
+        if name not in SETTINGS:
+            raise ConfigError(f'{name} is not a setting that can be changed')
+        section, key = name.split('.')
+        text = _set_line(text, section, key, None if value is None else _toml(value))
+    try:
+        config = _parse(tomllib.loads(text), source)
+    except tomllib.TOMLDecodeError as e:
+        raise ConfigError(f'{source}: {e}') from e
+
+    temporary = source.with_name(f'.{source.name}.new')
+    try:
+        temporary.write_text(text, encoding='utf-8')
+        os.chmod(temporary, stat.S_IMODE(source.stat().st_mode))
+        temporary.replace(source)
+    except OSError as e:
+        temporary.unlink(missing_ok=True)
+        raise ConfigError(f'cannot write {source}: {e.strerror}') from e
+    return config
+
+
+def _set_line(text: str, section: str, key: str, value: str | None) -> str:
+    """Set or remove one key of one table in the text of a TOML file."""
+    lines = text.splitlines(keepends=True)
+    header = re.compile(rf'\s*\[\s*{re.escape(section)}\s*\]\s*(#.*)?$')
+    start = next((i for i, line in enumerate(lines) if header.match(line)), None)
+    if start is None:
+        if value is None:
+            return text
+        if text and not text.endswith('\n'):
+            text += '\n'
+        return f'{text}\n[{section}]\n{key} = {value}\n'
+
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].lstrip().startswith('[')),
+               len(lines))
+    active = re.compile(rf'\s*{re.escape(key)}\s*=')
+    commented = re.compile(rf'\s*#\s*{re.escape(key)}\s*=')
+    entry = f'{key} = {value}\n'
+    if (at := next((i for i in range(start + 1, end) if active.match(lines[i])), None)) is not None:
+        # Removing deletes the line rather than commenting it out, so that no
+        # password is left behind in a comment.
+        lines[at:at + 1] = [] if value is None else [entry]
+    elif value is None:
+        return text
+    elif (at := next((i for i in reversed(range(start + 1, end))
+                      if commented.match(lines[i])), None)) is not None:
+        lines[at] = entry
+    else:
+        last = max((i for i in range(start, end) if lines[i].strip()), default=start)
+        if not lines[last].endswith('\n'):
+            lines[last] += '\n'
+        lines.insert(last + 1, entry)
+    return ''.join(lines)
+
+
+def _toml(value: Any) -> str:
+    """Render a value the way TOML writes it."""
+    if isinstance(value, bool):
+        return 'true' if value else 'false'
+    if isinstance(value, (int, float)):
+        return repr(value)
+    # A JSON string is also a valid basic string in TOML.
+    return json.dumps(str(value), ensure_ascii=False)
 
 
 def ensure_travel_entries(source: Path, paths: Iterable[str],

@@ -10,16 +10,23 @@ free of a dependency just for the interface.
 
 Values are kept up to date from the events the device pushes, so the display
 also follows changes made from a wall switch or from the Gira app.
+
+The interface is shown light or dark, or follows the desktop, as chosen from the
+menu on the room selection screen.  The same menu leads to a setup screen for
+the settings of the configuration file.
 """
 
 import math
+import platform
 import tkinter as tk
 from tkinter import font as tkfont
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
+from pathlib import Path
 from typing import Any, Callable
 
 import girax1
-from . import schedule
+from . import appearance, config, schedule
+from .appearance import Palette
 from .project import (BRIGHTNESS_POINT, COVER_POINT, STOP_POINT, SWITCH_POINT, Device,
                       Project)
 from .stack import BRIGHTNESS_MAX, Stack
@@ -58,14 +65,16 @@ SWITCH_OFF = '#c62828'
 SWITCH_OFF_PRESSED = '#8e0000'
 SWITCH_UNKNOWN = '#9e9e9e'
 SWITCH_UNKNOWN_PRESSED = '#707070'
-RING_TRACK = '#a8a8a8'
 RING_LEVEL = '#f9a825'
-
-# Background of the switch times of a device, and of anything that can be
-# clicked while the pointer is over it.
-TIMES_BACKGROUND = '#f4f4f4'
-HOVER_BACKGROUND = '#e2e8f0'
 TIMES_SHOWN = 10
+
+# How often to check whether the desktop changed between light and dark while
+# the interface follows it.
+APPEARANCE_POLL_MS = 5000
+
+# The appearances offered in the menu, with the label of each.
+APPEARANCE_LABELS = ((appearance.LIGHT, 'Light'), (appearance.DARK, 'Dark'),
+                     (appearance.AUTO, 'Auto (follow the system)'))
 
 # What can go wrong while programming a switch time.
 SCHEDULE_ERRORS = (ValueError, schedule.ScheduleError, girax1.X1Error, TimeoutError)
@@ -95,7 +104,7 @@ class DeviceTile(ttk.Frame):
         self.top.columnconfigure(0, weight=1)
         ttk.Label(self.top, text=device.name, font=app.bold).grid(row=0, column=0, sticky='w')
         ttk.Label(self.top, text=device.kind, font=app.small,
-                  foreground='grey40').grid(row=1, column=0, sticky='w')
+                  style='Muted.TLabel').grid(row=1, column=0, sticky='w')
         self.status = ttk.Label(self.top, text='', font=app.normal)
         self.status.grid(row=2, column=0, sticky='w', pady=(6, 0))
 
@@ -110,9 +119,9 @@ class DeviceTile(ttk.Frame):
         # The switch times, all of them, in an area that opens the window to
         # change them when clicked.  The next time due is shown below it.
         self.times: tk.Frame | None = None
-        self.next = ttk.Label(self, text='', font=app.small, foreground='grey30')
+        self.next = ttk.Label(self, text='', font=app.small, style='Subtle.TLabel')
         if device.timer_channel:
-            self.times = tk.Frame(self, background=TIMES_BACKGROUND, relief='groove',
+            self.times = tk.Frame(self, background=app.palette.times, relief='groove',
                                   borderwidth=2, padx=10, pady=10, cursor='hand2',
                                   takefocus=True, highlightthickness=1)
             self.times.grid(row=1, column=0, sticky='ew', pady=(8, 0))
@@ -133,17 +142,19 @@ class DeviceTile(ttk.Frame):
             (entry.when[:5], entry.days, _what(timer, entry, self.app.project, self.device),
              '' if entry.active else 'inactive')
             for entry in sorted(timer.switch_times, key=lambda e: e.time)]
+        colours = self.app.palette
         if not rows:
             tk.Label(self.times, text='No switch times', font=self.app.normal,
-                     foreground='grey30', background=TIMES_BACKGROUND).grid(row=0, column=0,
-                                                                            sticky='w')
+                     foreground=colours.subtle, background=colours.times).grid(row=0, column=0,
+                                                                               sticky='w')
         for row, cells in enumerate(rows):
             for column, text in enumerate(cells):
                 tk.Label(self.times, text=text, font=self.app.small,
-                         foreground='grey50' if cells[-1] else 'black',
-                         background=TIMES_BACKGROUND).grid(row=row, column=column, sticky='w',
-                                                           padx=(0, 10))
-        _clickable(self.times, lambda: TimesDialog(self.app, self.device), TIMES_BACKGROUND)
+                         foreground=colours.inactive if cells[-1] else colours.text,
+                         background=colours.times).grid(row=row, column=column, sticky='w',
+                                                        padx=(0, 10))
+        _clickable(self.times, lambda: TimesDialog(self.app, self.device), colours.times,
+                   colours.hover)
 
         if timer is not None and timer.next_trigger:
             self.next.configure(text=f'next {timer.next_trigger[:16]}')
@@ -201,9 +212,9 @@ class LightSwitch(tk.Canvas):
     def __init__(self, master: tk.Misc, app: 'Application', switchable: bool, dimmable: bool,
                  on_switch: Callable[[bool], None], on_dim: Callable[[int], None]) -> None:
         """Draw the switch, with the brightness ring if the light is dimmable."""
-        background = ttk.Style(master).lookup('TFrame', 'background') or 'white'
-        super().__init__(master, width=SWITCH_SIZE, height=SWITCH_SIZE, background=background,
-                         highlightthickness=0, cursor='hand2')
+        colours = app.palette
+        super().__init__(master, width=SWITCH_SIZE, height=SWITCH_SIZE,
+                         background=colours.background, highlightthickness=0, cursor='hand2')
         self.switchable = switchable
         self.dimmable = dimmable
         self.on_switch = on_switch
@@ -218,12 +229,12 @@ class LightSwitch(tk.Canvas):
             ring = (middle - RING_RADIUS, middle - RING_RADIUS,
                     middle + RING_RADIUS, middle + RING_RADIUS)
             self.create_arc(*ring, start=RING_START - RING_SPAN, extent=RING_SPAN,
-                            style='arc', width=RING_WIDTH, outline=RING_TRACK)
+                            style='arc', width=RING_WIDTH, outline=colours.ring_track)
             self.ring = self.create_arc(*ring, start=RING_START, extent=0, style='arc',
                                         width=RING_WIDTH, outline=RING_LEVEL, state='hidden')
             # The percentage sits in the gap the ring leaves at the bottom.
             self.percent = self.create_text(middle, middle + RING_RADIUS - 2, text='?',
-                                            font=app.small, fill='grey30')
+                                            font=app.small, fill=colours.subtle)
         self.button = self.create_oval(middle - SWITCH_RADIUS, middle - SWITCH_RADIUS,
                                        middle + SWITCH_RADIUS, middle + SWITCH_RADIUS,
                                        outline='', fill=SWITCH_UNKNOWN)
@@ -338,6 +349,14 @@ class Application(tk.Tk):
         self.previous_page: ttk.Button | None = None
         self.next_page: ttk.Button | None = None
         self.paging = False
+        # The room on display, or None while the rooms or the setup are shown.
+        self.room: str | None = None
+        self.setup: SetupForm | None = None
+
+        # The appearance chosen and the colours in use for it.
+        self.appearance = tk.StringVar(self, value=appearance.load())
+        self.palette = appearance.palette(self.appearance.get())
+        self.style = ttk.Style(self)
 
         self.title('Gira X1')
         self.geometry('960x680')
@@ -348,6 +367,7 @@ class Application(tk.Tk):
         self.bold.configure(weight='bold', size=self.normal.cget('size') + 1)
         self.small = self.normal.copy()
         self.small.configure(size=max(self.normal.cget('size') - 2, 7))
+        self._apply_palette()
 
         # The status line is packed first so that the body cannot push it out
         # of the window; the body gets what is left, which paging relies on.
@@ -356,6 +376,7 @@ class Application(tk.Tk):
         self.body = ttk.Frame(self, padding=BODY_PADDING)
         self.body.pack(fill='both', expand=True)
         self.body.bind('<Configure>', lambda _: self._repaginate_soon())
+        self.bind('<Control-q>', lambda _: self.destroy())
         self.bind('<Prior>', lambda _: self.turn(-1))
         self.bind('<Next>', lambda _: self.turn(1))
         self.bind('<MouseWheel>', lambda e: self.turn(-1 if e.delta > 0 else 1))
@@ -366,6 +387,7 @@ class Application(tk.Tk):
         self.reload_values()
         self.show_rooms()
         self.after(POLL_INTERVAL_MS, self._pump)
+        self.after(APPEARANCE_POLL_MS, self._follow_system)
 
     # ------------------------------------------------------------------ views
 
@@ -373,34 +395,48 @@ class Application(tk.Tk):
         """Show one tile per room."""
         self.tiles = []
         self._clear()
+        self.room = self.setup = None
         self.header = self.pager = None
         self.pages = []
-        ttk.Label(self.body, text='Rooms', font=self.bold).grid(row=0, column=0,
-                                                                columnspan=ROOM_COLUMNS,
-                                                                sticky='w', pady=(0, 10))
-        background = ttk.Style(self).lookup('TFrame', 'background') or 'white'
+
+        heading = ttk.Frame(self.body)
+        heading.grid(row=0, column=0, columnspan=ROOM_COLUMNS, sticky='ew', pady=(0, 10))
+        ttk.Label(heading, text='Rooms', font=self.bold).pack(side='left')
+        menu_button = ttk.Button(heading, text='\N{TRIGRAM FOR HEAVEN}', width=3)
+        menu_button.configure(command=lambda: self._show_menu(menu_button))
+        menu_button.pack(side='right')
+
+        colours = self.palette
         for index, (name, devices) in enumerate(self.rooms):
             # Clicking anywhere on the tile opens the room.
-            tile = tk.Frame(self.body, background=background, relief='ridge', borderwidth=1,
-                            padx=16, pady=16, cursor='hand2', takefocus=True,
-                            highlightthickness=1)
+            tile = tk.Frame(self.body, background=colours.background, relief='ridge',
+                            borderwidth=1, padx=16, pady=16, cursor='hand2', takefocus=True,
+                            highlightthickness=1, highlightbackground=colours.background,
+                            highlightcolor=colours.select)
             tile.grid(row=1 + index // ROOM_COLUMNS, column=index % ROOM_COLUMNS,
                       sticky='nsew', padx=TILE_GAP, pady=TILE_GAP)
-            tk.Label(tile, text=name, font=self.bold, background=background).pack(anchor='w')
+            tk.Label(tile, text=name, font=self.bold, foreground=colours.text,
+                     background=colours.background).pack(anchor='w')
             tk.Label(tile, text=f'{len(devices)} device' + ('' if len(devices) == 1 else 's'),
-                     font=self.small, foreground='grey40', background=background).pack(anchor='w')
-            tk.Label(tile, text=self._summary(devices), font=self.small,
-                     background=background).pack(anchor='w', pady=(6, 0))
-            _clickable(tile, lambda n=name: self.show_room(n), background)
+                     font=self.small, foreground=colours.muted,
+                     background=colours.background).pack(anchor='w')
+            tk.Label(tile, text=self._summary(devices), font=self.small, foreground=colours.text,
+                     background=colours.background).pack(anchor='w', pady=(6, 0))
+            _clickable(tile, lambda n=name: self.show_room(n), colours.background, colours.hover)
         for column in range(ROOM_COLUMNS):
-            self.body.columnconfigure(column, weight=1)
+            self.body.columnconfigure(column, weight=1, uniform='tiles')
 
-    def show_room(self, name: str) -> None:
-        """Show one tile per device of the named room."""
+    def show_room(self, name: str, top: int = 0) -> None:
+        """Show one tile per device of the named room.
+
+        The page shown is the one holding the row of tiles numbered ``top``.
+        """
         devices = dict(self.rooms).get(name, [])
         self._load_timers(devices)
         self.tiles = []
         self._clear()
+        self.room = name
+        self.setup = None
 
         self.header = ttk.Frame(self.body)
         self.header.grid(row=0, column=0, columnspan=DEVICE_COLUMNS, sticky='ew',
@@ -419,7 +455,8 @@ class Application(tk.Tk):
         self.next_page = ttk.Button(self.pager, text='\N{BLACK RIGHT-POINTING TRIANGLE}',
                                     width=3, command=lambda: self.turn(1))
         self.next_page.pack(side='left')
-        self.pages = []
+        # Paging starts out from the row to keep in view.
+        self.pages = [[top]]
         self.page = 0
 
         for index, device in enumerate(devices):
@@ -427,15 +464,60 @@ class Application(tk.Tk):
             tile.row, tile.column = divmod(index, DEVICE_COLUMNS)
             self.tiles.append(tile)
         for column in range(DEVICE_COLUMNS):
-            self.body.columnconfigure(column, weight=1)
+            self.body.columnconfigure(column, weight=1, uniform='tiles')
         self.refresh()
+
+    def show_setup(self) -> None:
+        """Show the settings of the configuration file for editing."""
+        source = self.stack.config.source
+        if source is None:
+            self.note('the settings did not come from a file, so there is nothing to edit')
+            return
+        try:
+            settings = config.read_settings(source)
+        except config.ConfigError as e:
+            messagebox.showerror('Setup', str(e), parent=self)
+            return
+        self.tiles = []
+        self._clear()
+        self.room = None
+        self.header = self.pager = None
+        self.pages = []
+
+        heading = ttk.Frame(self.body)
+        heading.grid(row=0, column=0, sticky='ew', pady=(0, PAGE_HEADER_GAP))
+        ttk.Button(heading, text='\N{LEFTWARDS ARROW} Rooms',
+                   command=self.show_rooms).pack(side='left')
+        ttk.Label(heading, text='Setup', font=self.bold).pack(side='left', padx=(12, 0))
+        self.setup = SetupForm(self.body, self, source, settings)
+        self.setup.grid(row=1, column=0, sticky='nw')
+
+    def reconnect(self, settings: config.Config) -> None:
+        """Connect with changed settings, keeping the old connection if that fails."""
+        stack = Stack(settings)
+        try:
+            stack.connect()
+            project = Project.parse(stack.ui_configuration())
+        except (girax1.X1Error, TimeoutError) as e:
+            stack.close()
+            messagebox.showerror('Setup', f'The settings are saved, but connecting with them '
+                                 f'failed: {e}\n\nThe connection made with the previous '
+                                 f'settings stays in use.', parent=self)
+            return
+        self.stack.close()
+        self.stack = stack
+        self.project = project
+        self.rooms = self._rooms()
+        self.timers = {}
+        self.reload_values()
+        self.note(f'settings saved, connected to {settings.host}')
 
     def _clear(self) -> None:
         """Remove everything from the body of the window."""
         for child in self.body.winfo_children():
             child.destroy()
         for column in range(max(ROOM_COLUMNS, DEVICE_COLUMNS)):
-            self.body.columnconfigure(column, weight=0)
+            self.body.columnconfigure(column, weight=0, uniform='')
 
     # --------------------------------------------------------------- commands
 
@@ -508,6 +590,105 @@ class Application(tk.Tk):
         for tile in self.tiles:
             rows.setdefault(tile.row, []).append(tile)
         return rows
+
+    # ------------------------------------------------------------- appearance
+
+    def _show_menu(self, button: ttk.Button) -> None:
+        """Pop up the menu of settings below its button."""
+        colours = self.palette
+        options = {'background': colours.field, 'foreground': colours.text,
+                   'activebackground': colours.select, 'activeforeground': colours.select_text,
+                   'selectcolor': colours.text, 'disabledforeground': colours.disabled,
+                   'tearoff': False}
+        menu = tk.Menu(self, **options)
+        looks = tk.Menu(menu, **options)
+        for choice, label in APPEARANCE_LABELS:
+            looks.add_radiobutton(label=label, value=choice, variable=self.appearance,
+                                  command=self._choose_appearance)
+        menu.add_cascade(label='Appearance', menu=looks)
+        menu.add_command(label='Setup\N{HORIZONTAL ELLIPSIS}', command=self.show_setup)
+        menu.add_separator()
+        menu.add_command(label='About\N{HORIZONTAL ELLIPSIS}', command=lambda: AboutDialog(self))
+        menu.add_separator()
+        menu.add_command(label='Quit', accelerator='Ctrl+Q', command=self.destroy)
+        menu.tk_popup(button.winfo_rootx(), button.winfo_rooty() + button.winfo_height())
+
+    def _choose_appearance(self) -> None:
+        """Switch to the appearance chosen in the menu and remember it."""
+        appearance.save(self.appearance.get())
+        self._use_palette(appearance.palette(self.appearance.get()))
+
+    def _follow_system(self) -> None:
+        """Change between light and dark along with the desktop, if it is followed."""
+        if self.appearance.get() == appearance.AUTO:
+            self._use_palette(appearance.palette(appearance.AUTO))
+        self.after(APPEARANCE_POLL_MS, self._follow_system)
+
+    def _use_palette(self, colours: Palette) -> None:
+        """Show the interface in other colours, drawing the current view anew."""
+        if colours == self.palette:
+            return
+        self.palette = colours
+        self._apply_palette()
+        for window in self.winfo_children():
+            if isinstance(window, tk.Toplevel):
+                window.configure(background=colours.background)
+        # The setup screen is made of themed widgets only, which follow by
+        # themselves; drawing it anew would lose what is being typed.
+        if self.setup is not None:
+            return
+        if self.room is None:
+            self.show_rooms()
+        else:
+            self.show_room(self.room, self.pages[self.page][0] if self.pages else 0)
+
+    def _apply_palette(self) -> None:
+        """Set the colours of all themed widgets and the defaults of the plain ones."""
+        c = self.palette
+        style = self.style
+        # Only the clam theme lets every colour be set, on every platform.
+        style.theme_use('clam')
+        style.configure('.', background=c.background, foreground=c.text,
+                        fieldbackground=c.field, bordercolor=c.border, lightcolor=c.background,
+                        darkcolor=c.background, troughcolor=c.field, focuscolor=c.select,
+                        selectbackground=c.select, selectforeground=c.select_text,
+                        insertcolor=c.text, arrowcolor=c.text)
+        style.map('.', foreground=[('disabled', c.disabled)],
+                  background=[('disabled', c.background)])
+        style.configure('TButton', background=c.button, lightcolor=c.button, darkcolor=c.button)
+        style.map('TButton', background=[('disabled', c.background), ('pressed', c.button_active),
+                                         ('active', c.button_active)],
+                  lightcolor=[('active', c.button_active)],
+                  darkcolor=[('active', c.button_active)])
+        style.configure('TCheckbutton', indicatorbackground=c.field, indicatorforeground=c.text)
+        style.map('TCheckbutton', background=[('active', c.background)],
+                  indicatorbackground=[('pressed', c.button_active), ('disabled', c.background)])
+        style.configure('Treeview', background=c.field, fieldbackground=c.field,
+                        foreground=c.text)
+        style.map('Treeview', background=[('selected', c.select)],
+                  foreground=[('selected', c.select_text)])
+        style.configure('Treeview.Heading', background=c.button, foreground=c.text)
+        style.map('Treeview.Heading', background=[('active', c.button_active)])
+        for widget in ('TCombobox', 'TSpinbox', 'TEntry'):
+            style.configure(widget, fieldbackground=c.field, foreground=c.text,
+                            background=c.button)
+            style.map(widget, fieldbackground=[('readonly', c.field)],
+                      background=[('active', c.button_active)])
+        style.configure('Muted.TLabel', foreground=c.muted)
+        style.configure('Subtle.TLabel', foreground=c.subtle)
+
+        # Plain Tk widgets, the list of a combobox and the message boxes take
+        # their colours from the option database when they are created.
+        for pattern, value in (('*Background', c.background), ('*Foreground', c.text),
+                               ('*activeBackground', c.button_active),
+                               ('*activeForeground', c.text),
+                               ('*highlightBackground', c.background),
+                               ('*TCombobox*Listbox.background', c.field),
+                               ('*TCombobox*Listbox.foreground', c.text),
+                               ('*TCombobox*Listbox.selectBackground', c.select),
+                               ('*TCombobox*Listbox.selectForeground', c.select_text)):
+            self.option_add(pattern, value)
+        self.configure(background=c.background)
 
     # ----------------------------------------------------------------- paging
 
@@ -627,6 +808,217 @@ class Application(tk.Tk):
                 self.timers[device.view_id] = None
 
 
+class AboutDialog(tk.Toplevel):
+    """Names the program, its version and what it is connected to."""
+
+    def __init__(self, app: 'Application') -> None:
+        """Open the window."""
+        super().__init__(app)
+        self.title('About')
+        self.transient(app)
+        self.resizable(False, False)
+
+        body = ttk.Frame(self, padding=20)
+        body.pack(fill='both', expand=True)
+        ttk.Label(body, text='Gira X1', font=app.bold).pack(anchor='w')
+        ttk.Label(body, text=f'Version {girax1.__version__}').pack(anchor='w', pady=(2, 10))
+        ttk.Label(body, text='Controls the lights, blinds and switch times of a Gira X1.'
+                  ).pack(anchor='w')
+        ttk.Label(body, text='Written by Ulrich Drepper.').pack(anchor='w', pady=(2, 10))
+        settings = app.stack.config
+        for line in (f'Connected to {settings.host}',
+                     f'Settings in {settings.source}' if settings.source is not None else '',
+                     f'Python {platform.python_version()}, Tk {self.tk.call("info", "patchlevel")}'):
+            if line:
+                ttk.Label(body, text=line, font=app.small, style='Muted.TLabel').pack(anchor='w')
+        close = ttk.Button(body, text='Close', command=self.destroy)
+        close.pack(anchor='e', pady=(16, 0))
+        self.bind('<Escape>', lambda _: self.destroy())
+        self.bind('<Return>', lambda _: self.destroy())
+
+        self.wait_visibility()
+        self.grab_set()
+        close.focus_set()
+
+
+class SetupForm(ttk.Frame):
+    """The settings of the configuration file, apart from the travel times of the blinds.
+
+    The settings needed to reach the device are shown at once; those which
+    rarely need changing are behind a button.
+    """
+
+    def __init__(self, master: tk.Misc, app: 'Application', source: Path,
+                 settings: dict[str, Any]) -> None:
+        """Lay out the settings as the file has them."""
+        super().__init__(master)
+        self.app = app
+        self.source = source
+        self.settings = settings
+        self.fields: dict[str, tk.Variable] = {}
+        self.secrets: list[ttk.Entry] = []
+
+        # All settings share one grid, so that the advanced ones line up with
+        # the others when they are shown.
+        row = self._heading(0, 'Device')
+        row = self._entry(row, 'device.host', 'Host name or address')
+        row = self._entry(row, 'device.port', 'Port', 'left empty: 443 with TLS, 80 without',
+                          width=8)
+        row = self._entry(row, 'device.timeout', 'Timeout', 'seconds', width=8)
+        row = self._heading(row, 'Login')
+        row = self._entry(row, 'auth.username', 'User name')
+        row = self._entry(row, 'auth.password', 'Password', secret=True)
+        row = self._entry(row, 'auth.token', 'Token',
+                          'used instead of user name and password if given', secret=True)
+        self.reveal = tk.BooleanVar(self, value=False)
+        ttk.Checkbutton(self, text='Show password and token', variable=self.reveal,
+                        command=self._reveal).grid(row=row, column=1, sticky='w', pady=(2, 0))
+        row += 1
+
+        self.toggle = ttk.Button(self, command=self._toggle_advanced)
+        self.toggle.grid(row=row, column=0, columnspan=2, sticky='w', pady=(16, 6))
+        row += 1
+        before = set(self.winfo_children())
+        row = self._entry(row, 'auth.client_id', 'Client ID',
+                          f'left empty: {config.DEFAULT_CLIENT_ID}')
+        row = self._check(row, 'tls.enabled', 'Use TLS for the REST API')
+        row = self._check(row, 'tls.verify', 'Verify the certificate of the device')
+        row = self._entry(row, 'tls.ca_cert', 'CA certificate',
+                          'left empty: the certificates of the system')
+        ttk.Button(self, text='Choose\N{HORIZONTAL ELLIPSIS}',
+                   command=self._choose_certificate).grid(row=row - 1, column=3, sticky='w',
+                                                         padx=(6, 0))
+        self.advanced = [w for w in self.winfo_children() if w not in before]
+        self.advanced_shown = False
+        for widget in self.advanced:
+            widget.grid_remove()
+        self._show_toggle()
+
+        buttons = ttk.Frame(self)
+        buttons.grid(row=row, column=0, columnspan=3, sticky='w', pady=(20, 0))
+        ttk.Button(buttons, text='Save', command=self._save).pack(side='left')
+        ttk.Button(buttons, text='Revert', command=self._revert).pack(side='left', padx=(6, 0))
+        ttk.Label(self, text=f'Stored in {source}', font=app.small,
+                  style='Muted.TLabel').grid(row=row + 1, column=0, columnspan=4, sticky='w',
+                                             pady=(10, 0))
+
+    def _heading(self, row: int, text: str) -> int:
+        """Add the heading of a group of settings and return the next free row."""
+        ttk.Label(self, text=text, font=self.app.bold).grid(
+            row=row, column=0, columnspan=3, sticky='w', pady=(0 if row == 0 else 14, 4))
+        return row + 1
+
+    def _entry(self, row: int, name: str, label: str, hint: str = '', width: int = 32,
+               secret: bool = False) -> int:
+        """Add a text field for a setting and return the next free row."""
+        value = self.settings.get(name)
+        variable = tk.StringVar(self, value='' if value is None else str(value))
+        self.fields[name] = variable
+        ttk.Label(self, text=label).grid(row=row, column=0, sticky='w', padx=(0, 12), pady=2)
+        entry = ttk.Entry(self, textvariable=variable, width=width,
+                          show='\N{BULLET}' if secret else '')
+        entry.grid(row=row, column=1, sticky='w', pady=2)
+        if secret:
+            self.secrets.append(entry)
+        if hint:
+            ttk.Label(self, text=hint, font=self.app.small, style='Muted.TLabel').grid(
+                row=row, column=2, sticky='w', padx=(8, 0))
+        return row + 1
+
+    def _check(self, row: int, name: str, label: str) -> int:
+        """Add a check box for a setting which is true unless the file says otherwise."""
+        variable = tk.BooleanVar(self, value=self.settings.get(name, True) is not False)
+        self.fields[name] = variable
+        ttk.Checkbutton(self, text=label, variable=variable).grid(row=row, column=1,
+                                                                  columnspan=2, sticky='w',
+                                                                  pady=2)
+        return row + 1
+
+    def _reveal(self) -> None:
+        """Show or hide the password and the token."""
+        for entry in self.secrets:
+            entry.configure(show='' if self.reveal.get() else '\N{BULLET}')
+
+    def _toggle_advanced(self) -> None:
+        """Show or hide the settings which rarely need changing."""
+        self.advanced_shown = not self.advanced_shown
+        for widget in self.advanced:
+            if self.advanced_shown:
+                widget.grid()
+            else:
+                widget.grid_remove()
+        self._show_toggle()
+
+    def _show_toggle(self) -> None:
+        """Label the button for the advanced settings with an arrow showing its state."""
+        arrow = '\N{BLACK DOWN-POINTING SMALL TRIANGLE}' if self.advanced_shown \
+            else '\N{BLACK RIGHT-POINTING SMALL TRIANGLE}'
+        self.toggle.configure(text=f'{arrow} Advanced settings')
+
+    def _choose_certificate(self) -> None:
+        """Pick the file of the CA certificate."""
+        chosen = filedialog.askopenfilename(
+            parent=self, title='CA certificate',
+            filetypes=[('Certificates', '*.pem *.crt *.cer'), ('All files', '*')])
+        if chosen:
+            self.fields['tls.ca_cert'].set(chosen)
+
+    def _changes(self) -> dict[str, Any]:
+        """Return the settings which differ from the file, converted to their types.
+
+        An emptied text field removes its setting, so that the default applies.
+        """
+        changes: dict[str, Any] = {}
+        for name, variable in self.fields.items():
+            kind = config.SETTINGS[name]
+            if kind is bool:
+                value = bool(variable.get())
+                if value != (self.settings.get(name, True) is not False):
+                    changes[name] = value
+                continue
+            text = str(variable.get()).strip()
+            if not text:
+                if name in self.settings:
+                    changes[name] = None
+                continue
+            try:
+                value = kind(text)
+            except ValueError:
+                raise ValueError(f'{name} has to be a {"whole " if kind is int else ""}'
+                                 f'number, not {text!r}') from None
+            if value != self.settings.get(name):
+                changes[name] = value
+        return changes
+
+    def _save(self) -> None:
+        """Write the changed settings to the file and connect with them."""
+        try:
+            changes = self._changes()
+            if not changes:
+                self.app.note('nothing changed')
+                return
+            settings = config.write_settings(self.source, changes)
+            self.settings = config.read_settings(self.source)
+        except (ValueError, config.ConfigError) as e:
+            messagebox.showerror('Setup', f'The settings are not saved: {e}', parent=self)
+            return
+        self.app.reconnect(settings)
+
+    def _revert(self) -> None:
+        """Fill in the settings as the file has them, dropping what was typed."""
+        try:
+            self.settings = config.read_settings(self.source)
+        except config.ConfigError as e:
+            messagebox.showerror('Setup', str(e), parent=self)
+            return
+        for name, variable in self.fields.items():
+            value = self.settings.get(name)
+            if config.SETTINGS[name] is bool:
+                variable.set(value is not False)
+            else:
+                variable.set('' if value is None else str(value))
+
+
 class TimesDialog(tk.Toplevel):
     """The switch times of one device, with the means to change them."""
 
@@ -655,7 +1047,7 @@ class TimesDialog(tk.Toplevel):
         self.table.bind('<Double-1>', lambda _: self._edit())
         self.table.bind('<<TreeviewSelect>>', lambda _: self._enable())
 
-        self.next = ttk.Label(body, text='', font=app.small, foreground='grey30')
+        self.next = ttk.Label(body, text='', font=app.small, style='Subtle.TLabel')
         self.next.grid(row=2, column=0, sticky='w', pady=(4, 0))
 
         buttons = ttk.Frame(body)
@@ -793,7 +1185,7 @@ class TimeEditor(tk.Toplevel):
             # A scene no single action describes stays as it is unless one is chosen.
             self.what.set('')
             ttk.Label(body, text=f'now: {_what(timer, entry, owner.app.project, device)}',
-                      font=owner.app.small, foreground='grey30').grid(row=3, column=1,
+                      font=owner.app.small, style='Subtle.TLabel').grid(row=3, column=1,
                                                                       sticky='w')
 
         self.active = tk.BooleanVar(self, value=entry.active if entry is not None else True)
@@ -846,7 +1238,8 @@ class TimeEditor(tk.Toplevel):
         self.destroy()
 
 
-def _clickable(area: tk.Frame, command: Callable[[], object], background: str) -> None:
+def _clickable(area: tk.Frame, command: Callable[[], object], background: str,
+               hover: str) -> None:
     """Run a command when an area is clicked anywhere, including on the text in it.
 
     The area is shaded while the pointer is over it, and the keyboard can
@@ -856,7 +1249,7 @@ def _clickable(area: tk.Frame, command: Callable[[], object], background: str) -
 
     def shade(inside: bool) -> None:
         for widget in widgets:
-            widget.configure(background=HOVER_BACKGROUND if inside else background)
+            widget.configure(background=hover if inside else background)
 
     for widget in widgets:
         widget.bind('<Button-1>', lambda _: command())
@@ -900,5 +1293,9 @@ def _number(value: Any) -> int:
 
 def run(stack: Stack, project: Project) -> int:
     """Show the interface and return once the window is closed."""
-    Application(stack, project).mainloop()
+    app = Application(stack, project)
+    app.mainloop()
+    # A connection made with changed settings is the interface's own to close.
+    if app.stack is not stack:
+        app.stack.close()
     return 0

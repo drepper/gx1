@@ -37,7 +37,7 @@ read from ~/.config/girax1.toml.
 # path, so the modules next to the script are found.
 install -d %{buildroot}%{_datadir}/%{name}/girax1 %{buildroot}%{_bindir}
 install -p -m 0755 x1.py %{buildroot}%{_datadir}/%{name}/x1.py
-install -p -m 0644 girax1/__init__.py girax1/config.py girax1/gui.py \
+install -p -m 0644 girax1/__init__.py girax1/appearance.py girax1/config.py girax1/gui.py \
         girax1/project.py girax1/schedule.py girax1/stack.py girax1/timer.py \
         girax1/websocket.py girax1/x1.py %{buildroot}%{_datadir}/%{name}/girax1/
 %py3_shebang_fix %{buildroot}%{_datadir}/%{name}/x1.py
