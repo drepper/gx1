@@ -89,6 +89,17 @@ ICON_FILES = (Path(__file__).resolve().parent.parent / 'data' / f'{ICON_NAME}.sv
               / f'{ICON_NAME}.svg')
 ICON_SIZE = 64
 
+# The license, its address and where its text is found, in the sources or as
+# the package installs it.
+LICENSE_SHORT = 'CC BY-NC-ND 4.0'
+LICENSE_NAME = 'Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International'
+LICENSE_SUMMARY = ('It may be copied and passed on for non-commercial purposes, giving credit '
+                   'to the author, but not in changed form.')
+LICENSE_URL = 'https://creativecommons.org/licenses/by-nc-nd/4.0/'
+LICENSE_FILES = (Path(__file__).resolve().parent.parent / 'LICENSE',
+                 Path(sys.prefix) / 'share' / 'licenses' / 'girax1' / 'LICENSE')
+ABOUT_WIDTH = 440
+
 # Devices not assigned to any room are collected under this heading.
 OTHER_ROOM = 'Elsewhere'
 
@@ -838,7 +849,7 @@ class Application(tk.Tk):
 
 
 class AboutDialog(tk.Toplevel):
-    """Names the program, its version and what it is connected to."""
+    """Names the program, its version, its license and what it is connected to."""
 
     def __init__(self, app: 'Application') -> None:
         """Open the window."""
@@ -853,22 +864,71 @@ class AboutDialog(tk.Toplevel):
         ttk.Label(body, text=f'Version {girax1.__version__}').pack(anchor='w', pady=(2, 10))
         ttk.Label(body, text='Controls the lights, blinds and switch times of a Gira X1.'
                   ).pack(anchor='w')
-        ttk.Label(body, text='Written by Ulrich Drepper.').pack(anchor='w', pady=(2, 0))
-        ttk.Label(body, text='Licensed under CC BY-NC-ND 4.0.').pack(anchor='w', pady=(0, 10))
+        ttk.Label(body, text='Written by Ulrich Drepper.').pack(anchor='w', pady=(2, 10))
         settings = app.stack.config
         for line in (f'Connected to {settings.host}',
                      f'Settings in {settings.source}' if settings.source is not None else '',
                      f'Python {platform.python_version()}, Tk {self.tk.call("info", "patchlevel")}'):
             if line:
                 ttk.Label(body, text=line, font=app.small, style='Muted.TLabel').pack(anchor='w')
-        close = ttk.Button(body, text='Close', command=self.destroy)
-        close.pack(anchor='e', pady=(16, 0))
+
+        ttk.Label(body, text='License', font=app.bold).pack(anchor='w', pady=(14, 2))
+        ttk.Label(body, text=f'Licensed under {LICENSE_SHORT}, the').pack(anchor='w')
+        ttk.Label(body, text=f'{LICENSE_NAME}.', wraplength=ABOUT_WIDTH,
+                  justify='left').pack(anchor='w')
+        ttk.Label(body, text=LICENSE_SUMMARY, wraplength=ABOUT_WIDTH,
+                  justify='left').pack(anchor='w', pady=(4, 0))
+        ttk.Label(body, text=LICENSE_URL, font=app.small,
+                  style='Muted.TLabel').pack(anchor='w', pady=(4, 0))
+
+        buttons = ttk.Frame(body)
+        buttons.pack(fill='x', pady=(16, 0))
+        self.license_text = _license_text()
+        self.toggle: ttk.Button | None = None
+        if self.license_text is not None:
+            self.toggle = ttk.Button(buttons, command=self._toggle_license)
+            self.toggle.pack(side='left')
+        close = ttk.Button(buttons, text='Close', command=self.destroy)
+        close.pack(side='right')
+
+        # The full text, shown on request below everything else.
+        self.license = ttk.Frame(body)
+        self.license_shown = False
+        if self.license_text is not None:
+            colours = app.palette
+            text = tk.Text(self.license, width=76, height=20, wrap='none',
+                           font=tkfont.nametofont('TkFixedFont'), background=colours.field,
+                           foreground=colours.text, highlightthickness=0, borderwidth=1,
+                           relief='solid')
+            scroll = ttk.Scrollbar(self.license, orient='vertical', command=text.yview)
+            text.configure(yscrollcommand=scroll.set)
+            text.insert('1.0', self.license_text)
+            text.configure(state='disabled')
+            text.pack(side='left', fill='both', expand=True)
+            scroll.pack(side='right', fill='y')
+            self._label_toggle()
         self.bind('<Escape>', lambda _: self.destroy())
         self.bind('<Return>', lambda _: self.destroy())
 
         self.wait_visibility()
         self.grab_set()
         close.focus_set()
+
+    def _toggle_license(self) -> None:
+        """Show or hide the full text of the license."""
+        self.license_shown = not self.license_shown
+        if self.license_shown:
+            self.license.pack(fill='both', expand=True, pady=(12, 0))
+        else:
+            self.license.pack_forget()
+        self._label_toggle()
+
+    def _label_toggle(self) -> None:
+        """Label the button for the license text with an arrow showing its state."""
+        if self.toggle is not None:
+            arrow = '\N{BLACK DOWN-POINTING SMALL TRIANGLE}' if self.license_shown \
+                else '\N{BLACK RIGHT-POINTING SMALL TRIANGLE}'
+            self.toggle.configure(text=f'{arrow} Show license')
 
 
 class SetupForm(ttk.Frame):
@@ -1266,6 +1326,16 @@ class TimeEditor(tk.Toplevel):
             return
         self.owner.show(timer, index)
         self.destroy()
+
+
+def _license_text() -> str | None:
+    """Return the full text of the license, if it can be found."""
+    for path in LICENSE_FILES:
+        try:
+            return path.read_text(encoding='utf-8')
+        except OSError:
+            continue
+    return None
 
 
 def _clickable(area: tk.Frame, command: Callable[[], object], background: str,
