@@ -36,7 +36,13 @@ not raised before then, whatever the sunrise plus the offset comes to.
 A location given as a description is looked up once with the geocoder of
 OpenStreetMap, which needs a connection to the internet, and its coordinates
 are kept next to it.  The adjustments are run by a timer of the systemd
-service manager of the user, see :func:`install_timer`.
+service manager of the user, see :func:`install_timer`, but only on the
+computer whose configuration says it is the control node:
+
+    control-node = true
+
+Several computers can share a configuration that way while only one of them
+reprograms the X1.
 """
 
 import json
@@ -61,6 +67,9 @@ from .timer import Timer
 
 SECTION = 'sunset'
 TIMES = 'sunset.times'
+
+# The key saying whether this computer adjusts the switch times.
+CONTROL_NODE = 'control-node'
 
 DEFAULT_DAYS = 'daily'
 DEFAULT_TIME = '12:00'
@@ -118,6 +127,10 @@ class SunsetError(Exception):
     """The sunset settings are incomplete or invalid, or cannot be acted on."""
 
 
+class NotControlNode(SunsetError):
+    """This computer is not the one which adjusts the switch times."""
+
+
 @dataclass(frozen=True, slots=True)
 class Link:
     """A switch time which follows the sunset or the sunrise."""
@@ -150,6 +163,8 @@ class Settings:
     time: str = schedule.parse_time(DEFAULT_TIME)
     # The switch times following the sunset, by device path.
     times: dict[str, tuple[Link, ...]] = field(default_factory=dict)
+    # Whether this computer adjusts the switch times following the sun.
+    control_node: bool = False
 
     @property
     def located(self) -> bool:
@@ -253,20 +268,25 @@ def load(source: Path) -> Settings:
         except (KeyError, TypeError, ValueError):
             raise SunsetError(f'{source}: {TIMES}."{path}" must be a list of tables with an '
                               f'index, an offset in minutes and an action') from None
+    if not isinstance(control_node := table.get(CONTROL_NODE, False), bool):
+        raise SunsetError(f'{source}: {SECTION}.{CONTROL_NODE} must be true or false')
     return Settings(location=str(table.get('location', '')),
                     latitude=number('latitude', -90, 90),
                     longitude=number('longitude', -180, 180),
-                    days=frozenset(days), time=time, times=links)
+                    days=frozenset(days), time=time, times=links, control_node=control_node)
 
 
 def configure(source: Path, *, location: str | None = None,
               place: tuple[float, float, str] | None = None,
-              days: set[int] | None = None, time: str | None = None) -> Settings:
+              days: set[int] | None = None, time: str | None = None,
+              control_node: bool | None = None) -> Settings:
     """Change the general sunset settings and return them as they are then.
 
     A location is either coordinates, as in ``52.52, 13.40``, or a description,
     which is looked up with :func:`locate`.  A place is what :func:`locate`
-    returned for one already.  What is not given stays as it is.
+    returned for one already.  What is not given stays as it is.  Changing
+    whether this computer is the control node does not install or remove the
+    timer; see :func:`sync_timer`.
     """
     entries: list[tuple[str, str, Any]] = []
     if place is None and location is not None:
@@ -284,6 +304,8 @@ def configure(source: Path, *, location: str | None = None,
             entries.append((SECTION, 'time', schedule.parse_time(time)[:5]))
         except ValueError as e:
             raise SunsetError(str(e)) from None
+    if control_node is not None:
+        entries.append((SECTION, CONTROL_NODE, control_node))
     if entries:
         _write(source, entries)
     return load(source)
@@ -468,9 +490,13 @@ def adjust(stack: Stack, project: Project, source: Path) -> list[Outcome]:
 
     A switch time is only reprogrammed when it is more than :data:`MIN_CHANGE`
     minutes away from where it belongs.  One deleted on the X1 is programmed
-    anew, acting every day, and the index it then has is recorded.
+    anew, acting every day, and the index it then has is recorded.  Only the
+    control node adjusts; anywhere else :class:`NotControlNode` is raised.
     """
     settings = load(source)
+    if not settings.control_node:
+        raise NotControlNode(f'this computer is not the control node; set '
+                             f'{SECTION}.{CONTROL_NODE} to true in {source} to adjust here')
     devices = project.paths()
     outcomes = []
     for path, links in settings.times.items():
@@ -545,11 +571,28 @@ def timer_installed() -> bool:
 
 
 def ensure_timer(source: Path, program: Path) -> bool:
-    """Install the timer running the adjustments unless it is; return whether it was."""
-    if timer_installed():
+    """Install the timer running the adjustments on the control node unless it is there.
+
+    Returns whether it was installed now.
+    """
+    if timer_installed() or not (settings := load(source)).control_node:
         return False
-    install_timer(source, program, load(source))
+    install_timer(source, program, settings)
     return True
+
+
+def sync_timer(source: Path, program: Path) -> str:
+    """Install or update the timer on the control node, and remove it anywhere else.
+
+    Returns what was done: ``installed``, ``removed`` or an empty string.
+    """
+    if load(source).control_node:
+        install_timer(source, program, load(source))
+        return 'installed'
+    if timer_installed():
+        uninstall_timer()
+        return 'removed'
+    return ''
 
 
 def _move(stack: Stack, device: Device, old: Link, time: str) -> tuple[Link, bool]:

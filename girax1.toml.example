@@ -63,6 +63,10 @@ verify = false
 # days = "daily"
 # time = "12:00"
 
+# Whether this computer moves the switch times.  Only one computer sharing the
+# configuration should; the timer is only installed where this is true.
+# control-node = false
+
 # The switch times following the sun, by device: the index of the switch time,
 # whether it follows the sunrise (the sunset unless the event says so), the
 # offset in minutes (negative for before) and what it does.  Coverings going up

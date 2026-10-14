@@ -181,6 +181,10 @@ def main() -> int:
                                      'weekend, or a list such as Mon,Thu')
     setting_sunset.add_argument('--time', metavar='TIME',
                                 help='time of day the switch times are adjusted, as HH:MM')
+    setting_sunset.add_argument('--control-node', action=argparse.BooleanOptionalAction,
+                                default=None,
+                                help='whether this computer is the one which adjusts the '
+                                     'switch times; the timer is only installed on it')
     setting_sunset.set_defaults(run=command_sunset_set)
     sunset_commands.add_parser('run', help='move the switch times after the sun now'
                                ).set_defaults(run=command_sunset_run)
@@ -380,8 +384,13 @@ def command_sunset_status(stack: Stack, project: Project, args: argparse.Namespa
             print(f'today      {e}')
     else:
         print('location   not set; use "sunset set --location PLACE"')
-    print(f'adjusted   {schedule.days_text(set(settings.days))} at {settings.time[:5]}, '
-          f'{"by the installed timer" if sunset.timer_installed() else "but no timer is installed"}')
+    if settings.control_node:
+        print(f'adjusted   {schedule.days_text(set(settings.days))} at {settings.time[:5]} by '
+              f'this computer, the control node, '
+              f'{"with the installed timer" if sunset.timer_installed() else "but no timer is installed"}')
+    else:
+        print(f'adjusted   {schedule.days_text(set(settings.days))} at {settings.time[:5]}, '
+              f'not by this computer, which is not the control node')
     if not settings.times:
         print('no switch times follow the sun')
         return 0
@@ -406,12 +415,18 @@ def command_sunset_status(stack: Stack, project: Project, args: argparse.Namespa
 
 
 def command_sunset_set(stack: Stack, project: Project, args: argparse.Namespace) -> int:
-    """Change the general sunset settings and install the timer running the adjustments."""
+    """Change the general sunset settings, and install or remove the timer to match.
+
+    The timer running the adjustments is installed or updated on the control
+    node and removed from any other computer.
+    """
     source = _source(stack)
     try:
         days = None if args.days is None else schedule.parse_days(args.days)
-        settings = sunset.configure(source, location=args.location, days=days, time=args.time)
-        sunset.install_timer(source, _program(), settings)
+        sunset.configure(source, location=args.location, days=days, time=args.time,
+                         control_node=args.control_node)
+        if sunset.sync_timer(source, _program()) == 'removed':
+            print('removed the timer: this computer is not the control node')
     except (ValueError, sunset.SunsetError) as e:
         print(e, file=sys.stderr)
         return 1
@@ -422,6 +437,10 @@ def command_sunset_run(stack: Stack, project: Project, args: argparse.Namespace)
     """Move every switch time following the sunset to today's sunset plus its offset."""
     try:
         outcomes = sunset.adjust(stack, project, _source(stack))
+    except sunset.NotControlNode as e:
+        # Not an error: another computer is the one adjusting.
+        print(e)
+        return 0
     except sunset.SunsetError as e:
         print(e, file=sys.stderr)
         return 1

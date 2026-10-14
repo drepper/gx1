@@ -1064,6 +1064,12 @@ class SetupForm(ttk.Frame):
         ttk.Label(self, text='time of day the switch times are moved after the sun',
                   font=self.app.small, style='Muted.TLabel').grid(row=row, column=2, sticky='w',
                                                                   padx=(8, 0))
+        row += 1
+        # Only one computer sharing the configuration should adjust.
+        self.sun_control = tk.BooleanVar(self)
+        ttk.Checkbutton(self, text='This computer adjusts the switch times (control node)',
+                        variable=self.sun_control).grid(row=row, column=1, columnspan=3,
+                                                        sticky='w', pady=2)
         self.sun_today = ttk.Label(self, text='', font=self.app.small, style='Muted.TLabel')
         self.sun_today.grid(row=row + 1, column=1, columnspan=3, sticky='w', pady=(2, 0))
         self._fill_sunset()
@@ -1120,6 +1126,7 @@ class SetupForm(ttk.Frame):
         for day, chosen in enumerate(self.sun_days):
             chosen.set(day in sun.days)
         self.sun_time.set(sun.time[:5])
+        self.sun_control.set(sun.control_node)
         if sun.latitude is None or sun.longitude is None:
             self.sun_place.configure(text='not set yet')
             self.sun_today.configure(text='')
@@ -1132,7 +1139,9 @@ class SetupForm(ttk.Frame):
             today = f'Today the sun rises at {up:%H:%M} and sets at {down:%H:%M}.'
         except sunset.SunsetError as e:
             today = f'{e}.'
-        if not sunset.timer_installed():
+        if not sun.control_node:
+            today += '  Another computer adjusts the switch times.'
+        elif not sunset.timer_installed():
             today += '  No timer adjusts the switch times yet; saving installs it.'
         self.sun_today.configure(text=today)
 
@@ -1150,6 +1159,8 @@ class SetupForm(ttk.Frame):
             changes['days'] = days
         if (time := schedule.parse_time(self.sun_time.get())) != sun.time:
             changes['time'] = time
+        if (control_node := self.sun_control.get()) != sun.control_node:
+            changes['control_node'] = control_node
         return changes
 
     def _heading(self, row: int, text: str) -> int:
@@ -1258,7 +1269,8 @@ class SetupForm(ttk.Frame):
         if sun_changes:
             try:
                 self.sun = sunset.configure(self.source, **sun_changes)
-                sunset.install_timer(self.source, Path(sys.argv[0]).absolute(), self.sun)
+                # The timer runs on the control node only.
+                sunset.sync_timer(self.source, Path(sys.argv[0]).absolute())
             except (ValueError, sunset.SunsetError) as e:
                 messagebox.showerror('Setup', f'The sunset settings are not saved completely: '
                                      f'{e}', parent=self)

@@ -128,12 +128,17 @@ those following the sunrise with ☼.
 - Everything is kept in the `[sunset]` table of the configuration file; see
   `girax1.toml.example`.  A switch time following the sunset which was deleted
   in the Gira app is programmed anew at the next adjustment.
-- The adjustments are run by a timer of the systemd service manager of the
-  user, `girax1-sunset.timer`, which is installed with the first switch time
-  following the sunset or when the settings are saved, and which
-  `x1.py sunset uninstall` removes.  A run missed while the computer was off is
-  made up for when it is on again.  Without `loginctl enable-linger` the timer
-  only runs while the user is logged in.
+- The adjustments are only made by the computer whose configuration has
+  `control-node = true` in the `[sunset]` table, so that several computers
+  can share a configuration while only one reprograms the X1.  It is set with
+  `x1.py sunset set --control-node` or on the setup screen, and is false
+  unless set.
+- On the control node the adjustments are run by a timer of the systemd
+  service manager of the user, `girax1-sunset.timer`, which saving the
+  settings installs there and removes anywhere else, and which
+  `x1.py sunset uninstall` removes.  A run missed while the computer was off
+  is made up for when it is on again.  Without `loginctl enable-linger` the
+  timer only runs while the user is logged in.
 
 ## Requirements
 
