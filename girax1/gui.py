@@ -70,6 +70,9 @@ SWITCH_UNKNOWN_PRESSED = '#707070'
 RING_LEVEL = '#f9a825'
 TIMES_SHOWN = 10
 
+# The length of the slider choosing what a switch time does to a light.
+SLIDER_LENGTH = 200
+
 # How often to check whether looking up a location is done.
 LOOKUP_POLL_MS = 100
 
@@ -1406,6 +1409,70 @@ class TimesDialog(tk.Toplevel):
         self.show(timer)
 
 
+class ActionSlider(ttk.Frame):
+    """Chooses what a switch time does to a light, from off to on or full brightness.
+
+    A dimmable light gets a position for every brightness its timer offers,
+    anything else the two positions off and on.  The action of the position
+    chosen is what :meth:`get` returns, in the form :func:`schedule.action`
+    takes; it is empty as long as a switch time no single action describes was
+    not changed.
+    """
+
+    WORDS = ('off', 'on')
+
+    def __init__(self, master: tk.Misc, offered: list[str], current: str | None,
+                 new: bool, changed: Callable[[], None]) -> None:
+        """Lay out the slider at the current action, or at its top for a new switch time."""
+        super().__init__(master)
+        self.positions = self._positions(offered, current)
+        self.changed = changed
+        self.chosen = current if current in self.positions else None
+        if self.chosen is None and new:
+            self.chosen = self.positions[-1]
+        self.scale = ttk.Scale(self, from_=0, to=len(self.positions) - 1, orient='horizontal',
+                               length=SLIDER_LENGTH, command=self._moved)
+        self.scale.pack(side='left')
+        self.label = ttk.Label(self, width=5, anchor='e')
+        self.label.pack(side='left', padx=(8, 0))
+        self._show(self.positions.index(self.chosen) if self.chosen is not None else 0)
+
+    @classmethod
+    def suits(cls, offered: list[str]) -> bool:
+        """Return whether the actions offered are those of a light."""
+        return bool(offered) and all(a in cls.WORDS or a.endswith('%') for a in offered)
+
+    def get(self) -> str:
+        """Return the action chosen, empty if none was."""
+        return self.chosen or ''
+
+    def _positions(self, offered: list[str], current: str | None) -> list[str]:
+        """Return the actions from off to on, the brightness levels if there are any.
+
+        An action a switch time has already decides between the two kinds.
+        """
+        levels = sorted((a for a in offered if a.endswith('%')), key=lambda a: int(a[:-1]))
+        words = [a for a in self.WORDS if a in offered]
+        return words if current in words or not levels else levels
+
+    def _moved(self, value: str) -> None:
+        """Snap to the nearest position and take its action."""
+        position = round(float(value))
+        if self.positions[position] != self.chosen:
+            self.chosen = self.positions[position]
+            self.changed()
+        self._show(position)
+
+    def _show(self, position: int) -> None:
+        """Put the slider on a position and name its action."""
+        if float(self.scale.get()) != position:
+            self.scale.set(position)
+        action = self.positions[position]
+        self.label.configure(text='\N{EM DASH}' if self.chosen is None
+                             else 'Off' if action in ('off', '0%') else
+                             'On' if action == 'on' else action)
+
+
 class TimeEditor(tk.Toplevel):
     """Asks for the details of a new switch time or for changes to one."""
 
@@ -1511,17 +1578,25 @@ class TimeEditor(tk.Toplevel):
                               if entry is not None else None)
         ttk.Label(body, text='Action').grid(row=5, column=0, sticky='w', pady=4)
         offered = schedule.actions(device, timer)
-        self.what = ttk.Combobox(body, values=offered, width=12)
-        self.what.bind('<<ComboboxSelected>>', lambda _: self._show_mode())
-        self.what.bind('<KeyRelease>', lambda _: self._show_mode())
-        self.what.grid(row=5, column=1, sticky='w', pady=4)
-        if entry is None:
-            self.what.set(offered[0] if offered else '')
-        elif self.original_what is not None:
-            self.what.set(self.original_what)
+        # A light is switched or dimmed with a slider, anything else chooses its
+        # action from a list.
+        self.what: ActionSlider | ttk.Combobox
+        if not self.covering and ActionSlider.suits(offered):
+            self.what = ActionSlider(body, offered, self.original_what, entry is None,
+                                     self._show_mode)
         else:
+            self.what = ttk.Combobox(body, values=offered, width=12)
+            self.what.bind('<<ComboboxSelected>>', lambda _: self._show_mode())
+            self.what.bind('<KeyRelease>', lambda _: self._show_mode())
+            if entry is None:
+                self.what.set(offered[0] if offered else '')
+            elif self.original_what is not None:
+                self.what.set(self.original_what)
+            else:
+                self.what.set('')
+        self.what.grid(row=5, column=1, sticky='w', pady=4)
+        if entry is not None and self.original_what is None:
             # A scene no single action describes stays as it is unless one is chosen.
-            self.what.set('')
             ttk.Label(body, text=f'now: {_what(timer, entry, owner.app.project, device)}',
                       font=owner.app.small, style='Subtle.TLabel').grid(row=6, column=1,
                                                                       sticky='w')
