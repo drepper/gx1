@@ -122,6 +122,9 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/org.akkadia.girax1.de
 %{_libdir}/pkgconfig/girax1.pc
 
 %changelog
+* Wed Oct 14 2026 Ulrich Drepper <github@akkadia.org> - 0.4-1
+- Switch times following the sunset or the sunrise.
+
 * Wed Oct 14 2026 Ulrich Drepper <github@akkadia.org> - 0.3-1
 - Move the x1 program into the noarch package girax1-x1; girax1 only holds
   the documentation and requires it.
