@@ -19,6 +19,7 @@ the settings of the configuration file.
 import math
 import platform
 import sys
+import threading
 import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import filedialog, messagebox, ttk
@@ -26,7 +27,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import girax1
-from . import appearance, config, schedule
+from . import appearance, config, schedule, sunset
 from .appearance import Palette
 from .project import (BRIGHTNESS_POINT, COVER_POINT, STOP_POINT, SWITCH_POINT, Device,
                       Project)
@@ -69,6 +70,9 @@ SWITCH_UNKNOWN_PRESSED = '#707070'
 RING_LEVEL = '#f9a825'
 TIMES_SHOWN = 10
 
+# How often to check whether looking up a location is done.
+LOOKUP_POLL_MS = 100
+
 # How often to check whether the desktop changed between light and dark while
 # the interface follows it.
 APPEARANCE_POLL_MS = 5000
@@ -78,7 +82,8 @@ APPEARANCE_LABELS = ((appearance.LIGHT, 'Light'), (appearance.DARK, 'Dark'),
                      (appearance.AUTO, 'Auto (follow the system)'))
 
 # What can go wrong while programming a switch time.
-SCHEDULE_ERRORS = (ValueError, schedule.ScheduleError, girax1.X1Error, TimeoutError)
+SCHEDULE_ERRORS = (ValueError, schedule.ScheduleError, sunset.SunsetError, config.ConfigError,
+                   girax1.X1Error, TimeoutError)
 
 # The window class, which the desktop file names so that the desktop matches
 # the window to it, and the name of the icon.  Tk capitalises the class.
@@ -159,21 +164,37 @@ class DeviceTile(ttk.Frame):
             return
         for child in self.times.winfo_children():
             child.destroy()
-        rows = [] if timer is None else [
-            (entry.when[:5], entry.days, _what(timer, entry, self.app.project, self.device),
-             '' if entry.active else 'inactive')
-            for entry in sorted(timer.switch_times, key=lambda e: e.time)]
+        # Switch times following the sun, and inactive ones, are marked as such
+        # on a line of their own below them, which keeps the lines short enough
+        # for the tile.
+        path = self.app.project.path(self.device)
+        entries = [] if timer is None else sorted(timer.switch_times, key=lambda e: e.time)
         colours = self.app.palette
-        if not rows:
+        if not entries:
             tk.Label(self.times, text='No switch times', font=self.app.normal,
                      foreground=colours.subtle, background=colours.times).grid(row=0, column=0,
                                                                                sticky='w')
-        for row, cells in enumerate(rows):
+        # A note spans an empty last column which takes all spare width, so that
+        # its length does not widen the columns of the switch times.
+        self.times.columnconfigure(3, weight=1)
+        row = 0
+        for entry in entries:
+            cells = (entry.when[:5], entry.days,
+                     _what(timer, entry, self.app.project, self.device))
             for column, text in enumerate(cells):
                 tk.Label(self.times, text=text, font=self.app.small,
-                         foreground=colours.inactive if cells[-1] else colours.text,
+                         foreground=colours.text if entry.active else colours.inactive,
                          background=colours.times).grid(row=row, column=column, sticky='w',
                                                         padx=(0, 10))
+            row += 1
+            note = ', '.join(note for note in (
+                _sunset_mark(self.app.sunset_settings.link(path, entry.index)),
+                '' if entry.active else 'inactive') if note)
+            if note:
+                tk.Label(self.times, text=note, font=self.app.small, foreground=colours.subtle,
+                         background=colours.times).grid(row=row, column=1, columnspan=3,
+                                                        sticky='w', pady=(0, 2))
+                row += 1
         _clickable(self.times, lambda: TimesDialog(self.app, self.device), colours.times,
                    colours.hover)
 
@@ -406,6 +427,7 @@ class Application(tk.Tk):
         self.bind('<Button-5>', lambda _: self.turn(1))
 
         self.rooms = self._rooms()
+        self.sunset_settings = self.load_sunset()
         self.reload_values()
         self.show_rooms()
         self.after(POLL_INTERVAL_MS, self._pump)
@@ -558,6 +580,16 @@ class Application(tk.Tk):
     def dim(self, device: Device, percent: int) -> None:
         """Set the brightness of a light."""
         self._write(device, BRIGHTNESS_POINT, lambda i: self.stack.dim(i, percent))
+
+    def load_sunset(self) -> sunset.Settings:
+        """Read the sunset settings, falling back to none if they cannot be read."""
+        if self.stack.config.source is None:
+            return sunset.Settings()
+        try:
+            return sunset.load(self.stack.config.source)
+        except sunset.SunsetError as e:
+            self.note(str(e))
+            return sunset.Settings()
 
     def update_timer(self, device: Device, timer: Timer) -> None:
         """Remember timer programming read back after a change and show it."""
@@ -964,6 +996,7 @@ class SetupForm(ttk.Frame):
         ttk.Checkbutton(self, text='Show password and token', variable=self.reveal,
                         command=self._reveal).grid(row=row, column=1, sticky='w', pady=(2, 0))
         row += 1
+        row = self._sunset_section(row)
 
         self.toggle = ttk.Button(self, command=self._toggle_advanced)
         self.toggle.grid(row=row, column=0, columnspan=2, sticky='w', pady=(16, 6))
@@ -991,6 +1024,132 @@ class SetupForm(ttk.Frame):
         ttk.Label(self, text=f'Stored in {source}', font=app.small,
                   style='Muted.TLabel').grid(row=row + 1, column=0, columnspan=4, sticky='w',
                                              pady=(10, 0))
+
+    def _sunset_section(self, row: int) -> int:
+        """Add the settings for switching lights on at sunset and return the next free row."""
+        row = self._heading(row, 'Switch times following the sun')
+        self.sun = self.app.sunset_settings
+        self.sun_location = tk.StringVar(self)
+        self.sun_days = [tk.BooleanVar(self) for _ in WEEKDAYS]
+        self.sun_time = tk.StringVar(self)
+
+        ttk.Label(self, text='Location').grid(row=row, column=0, sticky='w', padx=(0, 12),
+                                              pady=2)
+        # Leaving the field looks the location up, so that what was found can
+        # be checked before it is saved.
+        location = ttk.Entry(self, textvariable=self.sun_location, width=32)
+        location.bind('<FocusOut>', lambda _: self._locate())
+        location.bind('<Return>', lambda _: self._locate())
+        location.grid(row=row, column=1,
+                                                                      sticky='w', pady=2)
+        ttk.Label(self, text='a place, or latitude, longitude', font=self.app.small,
+                  style='Muted.TLabel').grid(row=row, column=2, sticky='w', padx=(8, 0))
+        self.sun_place = ttk.Label(self, text='', font=self.app.small, style='Muted.TLabel')
+        self.sun_place.grid(row=row + 1, column=1, columnspan=3, sticky='w')
+        row += 2
+
+        ttk.Label(self, text='Adjusted on').grid(row=row, column=0, sticky='w', padx=(0, 12),
+                                                 pady=2)
+        days = ttk.Frame(self)
+        days.grid(row=row, column=1, columnspan=3, sticky='w', pady=2)
+        for name, chosen in zip(WEEKDAYS, self.sun_days):
+            ttk.Checkbutton(days, text=name, variable=chosen).pack(side='left', padx=(0, 4))
+        row += 1
+
+        ttk.Label(self, text='Adjusted at').grid(row=row, column=0, sticky='w', padx=(0, 12),
+                                                 pady=2)
+        ttk.Entry(self, textvariable=self.sun_time, width=8).grid(row=row, column=1, sticky='w',
+                                                                  pady=2)
+        ttk.Label(self, text='time of day the switch times are moved after the sun',
+                  font=self.app.small, style='Muted.TLabel').grid(row=row, column=2, sticky='w',
+                                                                  padx=(8, 0))
+        self.sun_today = ttk.Label(self, text='', font=self.app.small, style='Muted.TLabel')
+        self.sun_today.grid(row=row + 1, column=1, columnspan=3, sticky='w', pady=(2, 0))
+        self._fill_sunset()
+        return row + 2
+
+    def _locate(self) -> None:
+        """Look up the location typed, in the background, and fill in what is found.
+
+        The lookup may take a while over the internet, so it runs in a thread
+        of its own while the interface stays responsive; its result is picked
+        up from Tk's event loop.
+        """
+        text = self.sun_location.get().strip()
+        if not text or text in (self.sun.location, self.sun_found[2] if self.sun_found else None):
+            return
+        self.sun_place.configure(text=f'looking up {text}\N{HORIZONTAL ELLIPSIS}')
+        result: list[tuple[float, float, str] | Exception] = []
+
+        def look_up() -> None:
+            try:
+                result.append(sunset.locate(text))
+            except sunset.SunsetError as e:
+                result.append(e)
+
+        threading.Thread(target=look_up, daemon=True).start()
+        self.after(LOOKUP_POLL_MS, self._located, text, result)
+
+    def _located(self, text: str, result: list[tuple[float, float, str] | Exception]) -> None:
+        """Fill in the location found, once the lookup is done."""
+        if not self.winfo_exists():
+            return
+        if not result:
+            self.after(LOOKUP_POLL_MS, self._located, text, result)
+            return
+        # What was typed meanwhile is not overwritten with an older answer.
+        if self.sun_location.get().strip() != text:
+            return
+        if isinstance(found := result[0], Exception):
+            self.sun_found = None
+            self.sun_place.configure(text=str(found))
+            return
+        self.sun_found = found
+        latitude, longitude, description = found
+        self.sun_location.set(description)
+        # The field is often too narrow for the whole name.
+        self.sun_place.configure(text=f'at {latitude:.4f}, {longitude:.4f}: {description}')
+
+    def _fill_sunset(self) -> None:
+        """Show the sunset settings as they are, with today's times."""
+        sun = self.sun
+        # The place looked up last, as latitude, longitude and description.
+        self.sun_found: tuple[float, float, str] | None = None
+        self.sun_location.set(sun.location)
+        for day, chosen in enumerate(self.sun_days):
+            chosen.set(day in sun.days)
+        self.sun_time.set(sun.time[:5])
+        if sun.latitude is None or sun.longitude is None:
+            self.sun_place.configure(text='not set yet')
+            self.sun_today.configure(text='')
+            return
+        self.sun_place.configure(text=f'at {sun.latitude:.4f}, {sun.longitude:.4f}: '
+                                      f'{sun.location}')
+        try:
+            up, _ = sunset.time_at(sun, 0, event=sunset.SUNRISE)
+            down, _ = sunset.time_at(sun, 0)
+            today = f'Today the sun rises at {up:%H:%M} and sets at {down:%H:%M}.'
+        except sunset.SunsetError as e:
+            today = f'{e}.'
+        if not sunset.timer_installed():
+            today += '  No timer adjusts the switch times yet; saving installs it.'
+        self.sun_today.configure(text=today)
+
+    def _sunset_changes(self) -> dict[str, Any]:
+        """Return the sunset settings which differ from the file, for :func:`sunset.configure`."""
+        sun = self.sun
+        changes: dict[str, Any] = {}
+        if (location := self.sun_location.get().strip()) and location != sun.location:
+            # What was looked up already is not looked up again.
+            if self.sun_found is not None and location == self.sun_found[2]:
+                changes['place'] = self.sun_found
+            else:
+                changes['location'] = location
+        if (days := {d for d, chosen in enumerate(self.sun_days) if chosen.get()}) != sun.days:
+            changes['days'] = days
+        if (time := schedule.parse_time(self.sun_time.get())) != sun.time:
+            changes['time'] = time
+        return changes
 
     def _heading(self, row: int, text: str) -> int:
         """Add the heading of a group of settings and return the next free row."""
@@ -1081,18 +1240,40 @@ class SetupForm(ttk.Frame):
         return changes
 
     def _save(self) -> None:
-        """Write the changed settings to the file and connect with them."""
+        """Write the changed settings to the file and connect with them.
+
+        Changed sunset settings also install or update the timer which moves
+        the switch times; looking up a location needs the internet.
+        """
         try:
             changes = self._changes()
-            if not changes:
-                self.app.note('nothing changed')
-                return
-            settings = config.write_settings(self.source, changes)
-            self.settings = config.read_settings(self.source)
-        except (ValueError, config.ConfigError) as e:
+            sun_changes = self._sunset_changes()
+        except ValueError as e:
             messagebox.showerror('Setup', f'The settings are not saved: {e}', parent=self)
             return
-        self.app.reconnect(settings)
+        if not changes and not sun_changes:
+            self.app.note('nothing changed')
+            return
+        if sun_changes:
+            try:
+                self.sun = sunset.configure(self.source, **sun_changes)
+                sunset.install_timer(self.source, Path(sys.argv[0]).absolute(), self.sun)
+            except (ValueError, sunset.SunsetError) as e:
+                messagebox.showerror('Setup', f'The sunset settings are not saved completely: '
+                                     f'{e}', parent=self)
+                return
+            finally:
+                self.sun = self.app.sunset_settings = self.app.load_sunset()
+                self._fill_sunset()
+            self.app.note('sunset settings saved')
+        if changes:
+            try:
+                settings = config.write_settings(self.source, changes)
+                self.settings = config.read_settings(self.source)
+            except config.ConfigError as e:
+                messagebox.showerror('Setup', f'The settings are not saved: {e}', parent=self)
+                return
+            self.app.reconnect(settings)
 
     def _revert(self) -> None:
         """Fill in the settings as the file has them, dropping what was typed."""
@@ -1107,6 +1288,8 @@ class SetupForm(ttk.Frame):
                 variable.set(value is not False)
             else:
                 variable.set('' if value is None else str(value))
+        self.sun = self.app.sunset_settings = self.app.load_sunset()
+        self._fill_sunset()
 
 
 class TimesDialog(tk.Toplevel):
@@ -1129,7 +1312,7 @@ class TimesDialog(tk.Toplevel):
 
         self.table = ttk.Treeview(body, columns=('time', 'days', 'action', 'active'),
                                   show='headings', selectmode='browse', height=TIMES_SHOWN)
-        for column, heading, width in (('time', 'Time', 80), ('days', 'Days', 160),
+        for column, heading, width in (('time', 'Time', 150), ('days', 'Days', 160),
                                        ('action', 'Action', 120), ('active', 'Active', 70)):
             self.table.heading(column, text=heading, anchor='w')
             self.table.column(column, width=width, anchor='w')
@@ -1167,9 +1350,11 @@ class TimesDialog(tk.Toplevel):
         if select is None and (chosen := self.table.selection()):
             select = int(chosen[0])
         self.table.delete(*self.table.get_children())
+        path = self.app.project.path(self.device)
         for entry in sorted(timer.switch_times, key=lambda e: e.time):
+            mark = _sunset_mark(self.app.sunset_settings.link(path, entry.index))
             self.table.insert('', 'end', iid=str(entry.index),
-                              values=(entry.when[:5], entry.days,
+                              values=(f'{entry.when[:5]}  {mark}'.strip(), entry.days,
                                       _what(timer, entry, self.app.project, self.device),
                                       'yes' if entry.active else 'no'))
         if select is not None and self.table.exists(str(select)):
@@ -1210,9 +1395,15 @@ class TimesDialog(tk.Toplevel):
                                    f'on {entry.days}?', parent=self):
             return
         try:
-            self.show(schedule.remove_time(self.app.stack, self.device, entry.index))
+            timer = schedule.remove_time(self.app.stack, self.device, entry.index)
+            if (source := self.app.stack.config.source) is not None:
+                sunset.unlink(source, self.app.project.path(self.device), entry.index)
         except SCHEDULE_ERRORS as e:
             messagebox.showerror('Remove switch time', str(e), parent=self)
+            return
+        finally:
+            self.app.sunset_settings = self.app.load_sunset()
+        self.show(timer)
 
 
 class TimeEditor(tk.Toplevel):
@@ -1232,11 +1423,24 @@ class TimeEditor(tk.Toplevel):
         body = ttk.Frame(self, padding=12)
         body.pack(fill='both', expand=True)
 
+        # The switch time acts either at a time of day or at the sunset or the
+        # sunrise plus an offset; the latter is moved after the sun from time to
+        # time.  Which of the two depends on what the switch time does.
+        self.path = owner.app.project.path(device)
+        self.sun = owner.app.sunset_settings
+        self.link = self.sun.link(self.path, entry.index) if entry is not None else None
+        self.mode = tk.StringVar(self, value='sun' if self.link is not None else 'clock')
+        # The offset follows the default for the event until it is changed.
+        self.offset_chosen = self.link is not None
+        self.shown_event = ''
+
         hour, minute = (entry.time.split(':')[:2] if entry is not None and ':' in entry.time
                         else ('07', '00'))
         ttk.Label(body, text='Time').grid(row=0, column=0, sticky='w', pady=4)
         clock = ttk.Frame(body)
         clock.grid(row=0, column=1, sticky='w', pady=4)
+        ttk.Radiobutton(clock, text='At', value='clock', variable=self.mode,
+                        command=self._show_mode).pack(side='left', padx=(0, 6))
         self.hour = ttk.Spinbox(clock, from_=0, to=23, width=3, format='%02.0f', wrap=True)
         self.hour.set(hour)
         self.hour.pack(side='left')
@@ -1246,9 +1450,51 @@ class TimeEditor(tk.Toplevel):
         self.minute.pack(side='left')
         self.original_time = (hour, minute)
 
-        ttk.Label(body, text='Days').grid(row=1, column=0, sticky='nw', pady=4)
+        evening = ttk.Frame(body)
+        evening.grid(row=1, column=1, sticky='w', pady=4)
+        self.at_sun = ttk.Radiobutton(evening, text='At sunset', value='sun', width=10,
+                                      variable=self.mode, command=self._show_mode)
+        self.at_sun.pack(side='left', padx=(0, 6))
+        self.offset = ttk.Spinbox(evening, from_=-sunset.MAX_OFFSET, to=sunset.MAX_OFFSET,
+                                  increment=5, width=5, command=self._offset_chosen)
+        if self.link is not None:
+            self.offset.set(str(self.link.offset))
+        self.offset.bind('<KeyRelease>', lambda _: self._offset_chosen())
+        self.offset.pack(side='left')
+        ttk.Label(evening, text='minutes after, negative for before').pack(side='left',
+                                                                           padx=(6, 0))
+        # A covering going up is not raised before a time of day.  The field is
+        # shown for every covering, but only takes effect for one going up at
+        # a time following the sunset.
+        point = device.point(COVER_POINT)
+        self.covering = point is not None and point.usable
+        self.limit = ttk.Frame(body)
+        self.limit.grid(row=2, column=1, sticky='w', pady=(0, 4))
+        earliest = (self.link.earliest if self.link is not None and self.link.earliest
+                    else sunset.EARLIEST_UP)
+        ttk.Label(self.limit, text='Not before').pack(side='left', padx=(0, 6))
+        self.earliest_hour = ttk.Spinbox(self.limit, from_=0, to=23, width=3, format='%02.0f',
+                                         wrap=True, command=self._show_today)
+        self.earliest_hour.set(earliest[:2])
+        self.earliest_hour.pack(side='left')
+        ttk.Label(self.limit, text=':').pack(side='left', padx=2)
+        self.earliest_minute = ttk.Spinbox(self.limit, from_=0, to=59, width=3,
+                                           format='%02.0f', wrap=True, command=self._show_today)
+        self.earliest_minute.set(earliest[3:5])
+        self.earliest_minute.pack(side='left')
+        ttk.Label(self.limit, text='at sunrise, the covering is never raised earlier'
+                  ).pack(side='left', padx=(6, 0))
+        for spinbox in (self.earliest_hour, self.earliest_minute):
+            spinbox.bind('<KeyRelease>', lambda _: self._show_today())
+        self.today = ttk.Label(body, text='', font=owner.app.small, style='Subtle.TLabel')
+        self.today.grid(row=3, column=1, sticky='w')
+        if not self.sun.located:
+            self.at_sun.state(['disabled'])
+            self.offset.state(['disabled'])
+
+        ttk.Label(body, text='Days').grid(row=4, column=0, sticky='nw', pady=4)
         days = ttk.Frame(body)
-        days.grid(row=1, column=1, sticky='w', pady=4)
+        days.grid(row=4, column=1, sticky='w', pady=4)
         chosen = entry.day_numbers if entry is not None else set(range(len(WEEKDAYS)))
         self.days = [tk.BooleanVar(self, value=i in chosen) for i in range(len(WEEKDAYS))]
         for i, (name, var) in enumerate(zip(WEEKDAYS, self.days)):
@@ -1263,10 +1509,12 @@ class TimeEditor(tk.Toplevel):
 
         self.original_what = (schedule.describe(device, timer, entry.index)
                               if entry is not None else None)
-        ttk.Label(body, text='Action').grid(row=2, column=0, sticky='w', pady=4)
+        ttk.Label(body, text='Action').grid(row=5, column=0, sticky='w', pady=4)
         offered = schedule.actions(device, timer)
         self.what = ttk.Combobox(body, values=offered, width=12)
-        self.what.grid(row=2, column=1, sticky='w', pady=4)
+        self.what.bind('<<ComboboxSelected>>', lambda _: self._show_mode())
+        self.what.bind('<KeyRelease>', lambda _: self._show_mode())
+        self.what.grid(row=5, column=1, sticky='w', pady=4)
         if entry is None:
             self.what.set(offered[0] if offered else '')
         elif self.original_what is not None:
@@ -1275,23 +1523,94 @@ class TimeEditor(tk.Toplevel):
             # A scene no single action describes stays as it is unless one is chosen.
             self.what.set('')
             ttk.Label(body, text=f'now: {_what(timer, entry, owner.app.project, device)}',
-                      font=owner.app.small, style='Subtle.TLabel').grid(row=3, column=1,
+                      font=owner.app.small, style='Subtle.TLabel').grid(row=6, column=1,
                                                                       sticky='w')
 
         self.active = tk.BooleanVar(self, value=entry.active if entry is not None else True)
-        ttk.Checkbutton(body, text='Active', variable=self.active).grid(row=4, column=1,
+        ttk.Checkbutton(body, text='Active', variable=self.active).grid(row=7, column=1,
                                                                         sticky='w', pady=4)
 
         buttons = ttk.Frame(body)
-        buttons.grid(row=5, column=0, columnspan=2, sticky='e', pady=(10, 0))
+        buttons.grid(row=8, column=0, columnspan=2, sticky='e', pady=(10, 0))
         ttk.Button(buttons, text='Cancel', command=self.destroy).pack(side='right')
         ttk.Button(buttons, text='OK', command=self._apply).pack(side='right', padx=(0, 4))
         self.bind('<Return>', lambda _: self._apply())
         self.bind('<Escape>', lambda _: self.destroy())
 
+        self._show_mode()
         self.wait_visibility()
         self.grab_set()
         self.hour.focus_set()
+
+    def _event(self) -> str:
+        """Return what the switch time follows as it is chosen, the sunset or the sunrise."""
+        what = self.what.get().strip() or self.original_what or ''
+        if self.link is not None and what == self.link.action:
+            return self.link.event
+        return sunset.event_for(what)
+
+    def _offset_chosen(self) -> None:
+        """Note that the offset was chosen, so that it no longer follows the default."""
+        self.offset_chosen = True
+        self._show_today()
+
+    def _show_mode(self) -> None:
+        """Enable the fields of the kind of time chosen, a time of day or the sun.
+
+        The choice of the sun names the event the action follows, and the offset
+        becomes the default for it unless one was chosen.
+        """
+        event = self._event()
+        if event != self.shown_event:
+            self.shown_event = event
+            self.at_sun.configure(text=f'At {event}')
+            if not self.offset_chosen:
+                self.offset.set(str(sunset.default_offset(self.device, event)))
+        sunny = self.mode.get() == 'sun'
+        for widget in (self.hour, self.minute):
+            widget.state(['disabled'] if sunny else ['!disabled'])
+        if self.sun.located:
+            self.offset.state(['!disabled'] if sunny else ['disabled'])
+        if self.covering:
+            self.limit.grid()
+        else:
+            self.limit.grid_remove()
+        applies = sunny and self._going_up() and self.sun.located
+        for widget in (self.earliest_hour, self.earliest_minute):
+            widget.state(['!disabled'] if applies else ['disabled'])
+        self._show_today()
+
+    def _going_up(self) -> bool:
+        """Return whether the switch time raises a covering, now or as chosen."""
+        what = self.what.get().strip() or self.original_what or ''
+        return what.lower() == sunset.UP
+
+    def _earliest(self) -> str | None:
+        """Return the earliest time chosen for a covering going up, None for anything else."""
+        if not self._going_up():
+            return None
+        return schedule.parse_time(f'{self.earliest_hour.get()}:{self.earliest_minute.get()}')[:5]
+
+    def _show_today(self) -> None:
+        """Say what the sunset or sunrise plus the offset comes to today."""
+        if not self.sun.located:
+            self.today.configure(text='Set the location of the house in the setup to use '
+                                      'the sunset and sunrise.')
+            return
+        if self.mode.get() != 'sun':
+            self.today.configure(text='')
+            return
+        event = self._event()
+        try:
+            offset = int(self.offset.get() or 0)
+            sun, on = sunset.time_at(self.sun, offset, event=event)
+            earliest = self._earliest() or ''
+            time = sunset.switch_time(self.sun, offset, earliest, event=event)
+            limited = f' (not before {earliest})' if time != on.strftime('%H:%M') else ''
+            self.today.configure(text=f'Today: {event} {sun:%H:%M}, so at {time}{limited}.  '
+                                      f'The time follows the {event} from day to day.')
+        except (ValueError, sunset.SunsetError):
+            self.today.configure(text='')
 
     def _choose_days(self, days: set[int]) -> None:
         """Tick exactly the given days."""
@@ -1302,30 +1621,78 @@ class TimeEditor(tk.Toplevel):
         """Program what was entered and close, or explain why it cannot be done."""
         days = {i for i, var in enumerate(self.days) if var.get()}
         what = self.what.get().strip()
+        app = self.owner.app
         try:
             if not days:
                 raise ValueError('choose at least one day')
-            when = schedule.parse_time(f'{self.hour.get()}:{self.minute.get()}')
-            app = self.owner.app
-            if self.entry is None:
-                if not what:
-                    raise ValueError('choose what the switch time does')
-                timer, index = schedule.add_time(app.stack, self.device, when, what, days,
-                                                 self.active.get())
+            if self.entry is None and not what:
+                raise ValueError('choose what the switch time does')
+            if self.mode.get() == 'sun':
+                timer, index = self._apply_sun(days, what)
             else:
-                index = self.entry.index
-                timer = schedule.change_time(
-                    app.stack, self.device, index,
-                    when=None if (self.hour.get(), self.minute.get()) == self.original_time
-                    else when,
-                    days=None if days == self.entry.day_numbers else days,
-                    active=None if self.active.get() == self.entry.active else self.active.get(),
-                    what=None if not what or what == self.original_what else what)
+                timer, index = self._apply_clock(days, what)
         except SCHEDULE_ERRORS as e:
             messagebox.showerror(self.title(), str(e), parent=self)
             return
+        finally:
+            app.sunset_settings = app.load_sunset()
         self.owner.show(timer, index)
         self.destroy()
+
+    def _apply_clock(self, days: set[int], what: str) -> tuple[Timer, int]:
+        """Program a switch time acting at a time of day."""
+        app = self.owner.app
+        when = schedule.parse_time(f'{self.hour.get()}:{self.minute.get()}')
+        if self.entry is None:
+            return schedule.add_time(app.stack, self.device, when, what, days,
+                                     self.active.get())
+        index = self.entry.index
+        # Leaving the sunset sets the time even if the fields were not touched.
+        unchanged = (self.hour.get(), self.minute.get()) == self.original_time
+        timer = schedule.change_time(
+            app.stack, self.device, index,
+            when=None if unchanged and self.link is None else when,
+            days=None if days == self.entry.day_numbers else days,
+            active=None if self.active.get() == self.entry.active else self.active.get(),
+            what=None if not what or what == self.original_what else what)
+        if self.link is not None:
+            sunset.unlink(self._source(), self.path, index)
+        return timer, index
+
+    def _apply_sun(self, days: set[int], what: str) -> tuple[Timer, int]:
+        """Program a switch time following the sun, and have the timer move it."""
+        app = self.owner.app
+        try:
+            offset = int(self.offset.get().strip() or 0)
+        except ValueError:
+            raise ValueError('the offset has to be a whole number of minutes') from None
+        source = self._source()
+        if self.entry is None:
+            timer, index = sunset.add_time(app.stack, source, self.device, self.path, offset,
+                                           what, days, self.active.get(), self._earliest(),
+                                           self._event())
+        else:
+            index = self.entry.index
+            timer = sunset.change_time(
+                app.stack, source, self.device, self.path, index, offset,
+                days=None if days == self.entry.day_numbers else days,
+                active=None if self.active.get() == self.entry.active else self.active.get(),
+                what=None if not what or what == self.original_what else what,
+                earliest=self._earliest(), event=self._event())
+        if sunset.ensure_timer(source, Path(sys.argv[0]).absolute()):
+            app.note('installed the timer which moves switch times after the sunset')
+        return timer, index
+
+    def _source(self) -> Path:
+        """Return the configuration file, which records the switch times following the sunset."""
+        if (source := self.owner.app.stack.config.source) is None:
+            raise sunset.SunsetError('the settings did not come from a file')
+        return source
+
+
+def _sunset_mark(link: sunset.Link | None) -> str:
+    """Return how a switch time following the sunset is marked, empty for any other."""
+    return '' if link is None else f'\N{BLACK SUN WITH RAYS} {link.text}'
 
 
 def _license_text() -> str | None:

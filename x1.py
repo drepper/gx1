@@ -18,6 +18,9 @@ device name, for example ``Flur/Deckenlampen Flur``.
     x1.py on "Flur/Deckenlampen Flur"   switch one lamp on
     x1.py down "Küche/"             lower every covering in the kitchen
     x1.py stop "*/Rollo*"           halt every covering whose name matches
+    x1.py addtime "Flur/Deckenlampen Flur" sunset+15 on    on a quarter after sunset
+    x1.py addtime "Küche/Rollo links" sunrise up             up at sunrise, by default
+    x1.py sunset set --location "Berlin" --days Mon,Thu --time 12:00
 """
 
 import argparse
@@ -28,7 +31,7 @@ from pathlib import Path
 from typing import Callable
 
 import girax1
-from girax1 import schedule
+from girax1 import schedule, sunset
 from girax1.project import (BRIGHTNESS_POINT, COVER_POINT, STOP_POINT, SWITCH_POINT, WILDCARDS,
                             Device, Project)
 from girax1.stack import BRIGHTNESS_MAX, Stack
@@ -108,7 +111,11 @@ def main() -> int:
     setting.add_argument('index', type=int, metavar='INDEX',
                          help='which switch time, as shown by the timers command')
     setting.add_argument('time', nargs='?', metavar='TIME',
-                         help='new time of day as HH:MM or HH:MM:SS')
+                         help='new time of day as HH:MM or HH:MM:SS, or sunset or sunrise '
+                              'with an optional offset in minutes, as in sunset+15 or '
+                              'sunrise-10; without one the offset stays, or is 10 minutes '
+                              'for lights and 20 for coverings, after the sunset and before '
+                              'the sunrise')
     setting.add_argument('--days', metavar='DAYS',
                          help='days to act on: daily, weekdays, weekend, or a list such as '
                               'Mon,Wed or Mon-Fri')
@@ -116,17 +123,28 @@ def main() -> int:
                          help='switch the entry on or off without deleting it')
     setting.add_argument('--scene', type=int, metavar='N',
                          help='number of the scene to apply, as shown by timers --long')
+    setting.add_argument('--not-before', metavar='TIME',
+                         help='for a covering going up at a time following the sun: the '
+                              'time of day before which it is never raised')
     setting.set_defaults(run=command_settime)
 
     adding = commands.add_parser('addtime', help='program a new switch time')
     adding.add_argument('path', metavar='PATH', help='the device to program')
-    adding.add_argument('time', metavar='TIME', help='time of day as HH:MM or HH:MM:SS')
+    adding.add_argument('time', metavar='TIME',
+                        help='time of day as HH:MM or HH:MM:SS, or sunset or sunrise with an '
+                             'optional offset in minutes, as in sunset+15 or sunrise-10; '
+                             'without one it is 10 minutes for lights and 20 for coverings, '
+                             'after the sunset and before the sunrise')
     adding.add_argument('action', metavar='ACTION',
                         help='what to do: on, off, up, down, or a brightness from 0 to 100')
     adding.add_argument('--days', default='daily', metavar='DAYS',
                         help='days to act on (default: daily)')
     adding.add_argument('--active', action=argparse.BooleanOptionalAction, default=False,
                         help='program the entry as active; it is added switched off by default')
+    adding.add_argument('--not-before', metavar='TIME',
+                        help='for a covering going up at a time following the sun: the '
+                             f'time of day before which it is never raised (default: '
+                             f'{sunset.EARLIEST_UP})')
     adding.set_defaults(run=command_addtime)
 
     deleting = commands.add_parser('deltime', help='delete a programmed switch time')
@@ -139,6 +157,35 @@ def main() -> int:
 
     commands.add_parser('gui', help='show the graphical user interface'
                         ).set_defaults(run=command_gui)
+
+    sunsets = commands.add_parser(
+        'sunset', help='settings for switch times following the sunset or sunrise',
+        description='Switch times given to addtime or settime as sunset or sunrise, '
+                    'optionally with an offset in minutes as in sunset+15 or sunrise-10, '
+                    'follow the sun: on the days and at the time chosen here they are moved '
+                    'to the sunset or sunrise of the day plus their offset.  A timer of the '
+                    'systemd service manager of the user runs these adjustments.')
+    sunsets.set_defaults(run=command_sunset_status)
+    sunset_commands = sunsets.add_subparsers(dest='sunset_command', metavar='ACTION')
+    sunset_commands.add_parser('status', help='show the settings and the switch times '
+                                              'following the sun'
+                               ).set_defaults(run=command_sunset_status)
+    setting_sunset = sunset_commands.add_parser(
+        'set', help='change the location or when the adjustments run, and install the '
+                    'timer running them')
+    setting_sunset.add_argument('--location', metavar='PLACE',
+                                help='a description of the place, looked up with '
+                                     'OpenStreetMap, or coordinates as "LATITUDE, LONGITUDE"')
+    setting_sunset.add_argument('--days', metavar='DAYS',
+                                help='days the switch times are adjusted: daily, weekdays, '
+                                     'weekend, or a list such as Mon,Thu')
+    setting_sunset.add_argument('--time', metavar='TIME',
+                                help='time of day the switch times are adjusted, as HH:MM')
+    setting_sunset.set_defaults(run=command_sunset_set)
+    sunset_commands.add_parser('run', help='move the switch times after the sun now'
+                               ).set_defaults(run=command_sunset_run)
+    sunset_commands.add_parser('uninstall', help='remove the timer running the adjustments'
+                               ).set_defaults(run=command_sunset_uninstall)
 
     args = parser.parse_args()
 
@@ -180,20 +227,30 @@ def command_switch(stack: Stack, project: Project, args: argparse.Namespace) -> 
 
 
 def command_addtime(stack: Stack, project: Project, args: argparse.Namespace) -> int:
-    """Program a new switch time for one device."""
+    """Program a new switch time for one device, at a time of day or following the sunset."""
     device = _one(project, args.path)
     if device is None:
         return 1
+    path = project.path(device)
     try:
-        timer, index = schedule.add_time(stack, device, args.time, args.action,
-                                         schedule.parse_days(args.days), args.active)
-    except (ValueError, schedule.ScheduleError, girax1.X1Error, TimeoutError) as e:
-        print(f'{project.path(device)}: {e}', file=sys.stderr)
+        days = schedule.parse_days(args.days)
+        if (sun := sunset.parse_when(args.time)) is None:
+            timer, index = schedule.add_time(stack, device, args.time, args.action, days,
+                                             args.active)
+        else:
+            event, offset = sun
+            if offset is None:
+                offset = sunset.default_offset(device, event)
+            timer, index = sunset.add_time(stack, _source(stack), device, path, offset,
+                                           args.action, days, args.active, args.not_before,
+                                           event)
+            sunset.ensure_timer(_source(stack), _program())
+    except (ValueError, sunset.SunsetError, schedule.ScheduleError, girax1.X1Error,
+            TimeoutError) as e:
+        print(f'{path}: {e}', file=sys.stderr)
         return 1
 
-    entry = next(e for e in timer.switch_times if e.index == index)
-    print(f'{project.path(device)}  {entry.index}  {entry.when}  {entry.days}  '
-          f'{"on" if entry.active else "off"}  {_scene(project, timer, entry)}')
+    _print_time(stack, project, path, timer, index)
     return 0
 
 
@@ -202,14 +259,16 @@ def command_deltime(stack: Stack, project: Project, args: argparse.Namespace) ->
     device = _one(project, args.path)
     if device is None:
         return 1
+    path = project.path(device)
     try:
         timer = schedule.remove_time(stack, device, args.index, args.keep_scenes)
-    except (schedule.ScheduleError, girax1.X1Error, TimeoutError) as e:
-        print(f'{project.path(device)}: {e}', file=sys.stderr)
+        sunset.unlink(_source(stack), path, args.index)
+    except (sunset.SunsetError, schedule.ScheduleError, girax1.X1Error, TimeoutError) as e:
+        print(f'{path}: {e}', file=sys.stderr)
         return 1
 
     remaining = ', '.join(str(e.index) for e in timer.switch_times) or 'none'
-    print(f'{project.path(device)}: switch time {args.index} deleted, remaining: {remaining}')
+    print(f'{path}: switch time {args.index} deleted, remaining: {remaining}')
     return 0
 
 
@@ -223,28 +282,69 @@ def _one(project: Project, path: str) -> Device | None:
 
 
 def command_settime(stack: Stack, project: Project, args: argparse.Namespace) -> int:
-    """Change one programmed switch time of one device."""
-    if args.time is None and args.days is None and args.active is None and args.scene is None:
-        print('nothing to change; give a time, --days, --active or --scene', file=sys.stderr)
+    """Change one programmed switch time of one device.
+
+    A time given as following the sunset ties the switch time to it; a time of
+    day unties it.
+    """
+    if args.time is None and args.days is None and args.active is None and args.scene is None \
+            and args.not_before is None:
+        print('nothing to change; give a time, --days, --active, --scene or --not-before',
+              file=sys.stderr)
         return 1
 
     device = _one(project, args.path)
     if device is None:
         return 1
+    path = project.path(device)
     try:
         days = None if args.days is None else schedule.parse_days(args.days)
-        timer = schedule.change_time(stack, device, args.index, when=args.time, days=days,
-                                     active=args.active, scene=args.scene)
-    except (ValueError, schedule.ScheduleError, girax1.X1Error, TimeoutError) as e:
-        print(f'{project.path(device)}: {e}', file=sys.stderr)
+        link = _sunset_settings(stack).link(path, args.index)
+        sun = None if args.time is None else sunset.parse_when(args.time)
+        if sun is not None:
+            event, offset = sun
+            # A bare "sunset" keeps the offset a switch time following the
+            # sunset has, and so for the sunrise.
+            if offset is None:
+                offset = (link.offset if link is not None and link.event == event
+                          else sunset.default_offset(device, event))
+        elif args.not_before is not None:
+            # The earliest time only matters to a switch time following the sun.
+            if args.time is not None or link is None:
+                raise sunset.SunsetError('--not-before needs a time following the sun')
+            event, offset = link.event, link.offset
+        else:
+            event = offset = None
+        if offset is None:
+            timer = schedule.change_time(stack, device, args.index, when=args.time, days=days,
+                                         active=args.active, scene=args.scene)
+            if args.time is not None:
+                sunset.unlink(_source(stack), path, args.index)
+        else:
+            if args.scene is not None:
+                schedule.change_time(stack, device, args.index, scene=args.scene)
+            timer = sunset.change_time(stack, _source(stack), device, path, args.index, offset,
+                                       days=days, active=args.active,
+                                       earliest=args.not_before, event=event)
+            sunset.ensure_timer(_source(stack), _program())
+    except (ValueError, sunset.SunsetError, schedule.ScheduleError, girax1.X1Error,
+            TimeoutError) as e:
+        print(f'{path}: {e}', file=sys.stderr)
         return 1
 
-    entry = next(e for e in timer.switch_times if e.index == args.index)
-    print(f'{project.path(device)}  {entry.index}  {entry.when}  {entry.days}  '
-          f'{"on" if entry.active else "off"}  {_scene(project, timer, entry)}')
+    _print_time(stack, project, path, timer, args.index)
     if timer.next_trigger:
         print(f'next {timer.next_trigger}')
     return 0
+
+
+def _print_time(stack: Stack, project: Project, path: str, timer, index: int) -> None:
+    """Print one switch time, marked if it follows the sunset."""
+    entry = next(e for e in timer.switch_times if e.index == index)
+    link = _sunset_settings(stack).link(path, index)
+    when = f'{entry.when} ({link.text})' if link is not None else entry.when
+    print(f'{path}  {entry.index}  {when}  {entry.days}  '
+          f'{"on" if entry.active else "off"}  {_scene(project, timer, entry)}')
 
 
 def command_gui(stack: Stack, project: Project, args: argparse.Namespace) -> int:
@@ -261,9 +361,119 @@ def command_gui(stack: Stack, project: Project, args: argparse.Namespace) -> int
     return gui.run(stack, project)
 
 
+def command_sunset_status(stack: Stack, project: Project, args: argparse.Namespace) -> int:
+    """Show the sunset settings and the switch times following the sunset."""
+    try:
+        settings = sunset.load(_source(stack))
+    except sunset.SunsetError as e:
+        print(e, file=sys.stderr)
+        return 1
+    if settings.latitude is not None and settings.longitude is not None:
+        coordinates = f'{settings.latitude:.4f}, {settings.longitude:.4f}'
+        print(f'location   {settings.location}'
+              + ('' if settings.location == coordinates else f' ({coordinates})'))
+        try:
+            up, _ = sunset.time_at(settings, 0, event=sunset.SUNRISE)
+            down, _ = sunset.time_at(settings, 0)
+            print(f'today      sunrise at {up:%H:%M}, sunset at {down:%H:%M}')
+        except sunset.SunsetError as e:
+            print(f'today      {e}')
+    else:
+        print('location   not set; use "sunset set --location PLACE"')
+    print(f'adjusted   {schedule.days_text(set(settings.days))} at {settings.time[:5]}, '
+          f'{"by the installed timer" if sunset.timer_installed() else "but no timer is installed"}')
+    if not settings.times:
+        print('no switch times follow the sun')
+        return 0
+    print('switch times following the sun')
+    devices = project.paths()
+    for path, links in settings.times.items():
+        timer = None
+        if (device := devices.get(path)) is not None:
+            try:
+                timer = stack.timer(device.timer_channel)
+            except (girax1.X1Error, TimeoutError) as e:
+                print(f'   {path}: {e}', file=sys.stderr)
+        for link in links:
+            entry = None if timer is None else next(
+                (e for e in timer.switch_times if e.index == link.index), None)
+            state = ('no longer in the project' if device is None
+                     else 'deleted, programmed anew at the next adjustment' if entry is None
+                     else f'at {entry.time[:5]} {entry.days}, {link.action or "?"}'
+                          f'{"" if entry.active else ", inactive"}')
+            print(f'   {path:<36} {link.index:>2}  {link.text:<32} {state}')
+    return 0
+
+
+def command_sunset_set(stack: Stack, project: Project, args: argparse.Namespace) -> int:
+    """Change the general sunset settings and install the timer running the adjustments."""
+    source = _source(stack)
+    try:
+        days = None if args.days is None else schedule.parse_days(args.days)
+        settings = sunset.configure(source, location=args.location, days=days, time=args.time)
+        sunset.install_timer(source, _program(), settings)
+    except (ValueError, sunset.SunsetError) as e:
+        print(e, file=sys.stderr)
+        return 1
+    return command_sunset_status(stack, project, args)
+
+
+def command_sunset_run(stack: Stack, project: Project, args: argparse.Namespace) -> int:
+    """Move every switch time following the sunset to today's sunset plus its offset."""
+    try:
+        outcomes = sunset.adjust(stack, project, _source(stack))
+    except sunset.SunsetError as e:
+        print(e, file=sys.stderr)
+        return 1
+    failed = False
+    for outcome in outcomes:
+        if outcome.error:
+            print(f'{outcome.path} {outcome.link.index}: {outcome.error}', file=sys.stderr)
+            failed = True
+        elif outcome.moved:
+            print(f'{outcome.path} {outcome.link.index}: moved to {outcome.time} '
+                  f'({outcome.link.text})')
+        else:
+            print(f'{outcome.path} {outcome.link.index}: kept, {outcome.link.text} is '
+                  f'{outcome.time}, within {sunset.MIN_CHANGE} minutes')
+    return 1 if failed else 0
+
+
+def command_sunset_uninstall(stack: Stack, project: Project, args: argparse.Namespace) -> int:
+    """Remove the timer running the adjustments."""
+    try:
+        sunset.uninstall_timer()
+    except sunset.SunsetError as e:
+        print(e, file=sys.stderr)
+        return 1
+    print('the switch times are no longer adjusted; those programmed stay as they are')
+    return 0
+
+
+def _sunset_settings(stack: Stack) -> sunset.Settings:
+    """Return the sunset settings, or none if they cannot be read."""
+    try:
+        return sunset.load(_source(stack))
+    except sunset.SunsetError:
+        return sunset.Settings()
+
+
+def _program() -> Path:
+    """Return the program, as the timer running the adjustments is to start it."""
+    return Path(sys.argv[0]).absolute()
+
+
+def _source(stack: Stack) -> Path:
+    """Return the configuration file the settings came from."""
+    if stack.config.source is None:
+        raise SystemExit('the settings did not come from a file')
+    return stack.config.source
+
+
 def command_timers(stack: Stack, project: Project, args: argparse.Namespace) -> int:
     """Print the switch times programmed for the selected devices."""
     devices, failed = _select(project, args.paths) if args.paths else (list(project), False)
+    settings = _sunset_settings(stack)
 
     shown = 0
     for device in devices:
@@ -283,8 +493,10 @@ def command_timers(stack: Stack, project: Project, args: argparse.Namespace) -> 
             print('   no switch times programmed')
         for entry in timer.switch_times:
             state = 'on ' if entry.active else 'off'
+            link = settings.link(project.path(device), entry.index)
             print(f'   {entry.index}  {entry.when:<9} {entry.days:<16} {state}  '
-                  f'{_scene(project, timer, entry)}')
+                  f'{_scene(project, timer, entry)}'
+                  + (f'  ({link.text})' if link is not None else ''))
             if args.long:
                 print(f'      scene {entry.trigger_value}, {entry.recurrence}, '
                       f'valid from {entry.begin_date} ({entry.validity})')

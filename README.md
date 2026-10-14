@@ -73,7 +73,8 @@ Every device in it gets a tile with controls that suit it:
   the ring to change it.
 - Blinds have buttons to raise, stop and lower them.
 - Below the controls are the switch times of the device.  Clicking them opens a
-  window to add, change and remove switch times.
+  window to add, change and remove switch times, at a time of day or following
+  the sunset or sunrise (see below).
 
 The display follows changes made from wall switches or the Gira app as they
 happen.  A room with more devices than fit into the window is split into pages.
@@ -86,6 +87,53 @@ and to an About window.  The appearance chosen is kept in
 The interface uses Tk, which comes with Python but is packaged separately on
 some systems (`python3-tkinter` on Fedora).
 
+### Switch times following the sun
+
+A switch time can follow the sunset or the sunrise instead of acting at a fixed
+time of day, with an offset of some minutes before or after it.  Lights and
+switches go on at sunset and off at sunrise, coverings go down at sunset and up
+at sunrise.  A switch time on the X1 stays where it is programmed while the sun
+moves through the year, so such switch times are moved from time to time: on
+the days and at the time of day chosen, the sunset and sunrise of the day are
+computed for the location of the house and every switch time following them is
+set to its event plus its offset, if that is more than 10 minutes away from
+where it is.  Its days, whether it is active and what it does stay as they are.
+
+Unless another offset is chosen, lights and switches act 10 minutes after the
+sunset and 10 minutes before the sunrise, coverings 20 minutes after the sunset
+and 20 minutes before the sunrise; `sunset+0` is the sunset itself.  Coverings
+going up are never raised before 06:00, or another time chosen with
+`--not-before` or in the dialog, whatever the sunrise plus the offset comes to.
+
+    x1.py sunset set --location "Berlin" --days Mon,Thu --time 12:00
+    x1.py addtime "Flur/Deckenlampen Flur" sunset+15 on --days weekdays --active
+    x1.py addtime "Flur/Deckenlampen Flur" sunrise off --active
+    x1.py addtime "Küche/Rollo links" sunset down --active
+    x1.py addtime "Küche/Rollo links" sunrise up --not-before 07:00 --active
+    x1.py settime "Küche/Rollo links" 2 21:00           a fixed time again
+    x1.py sunset                         the settings and the switch times
+
+In the graphical interface the dialog for a switch time offers "At sunset" or
+"At sunrise", whichever suits the action, with an offset as the alternative to
+a time of day, and the setup screen holds the location and when the switch
+times are moved.  Switch times following the sun are marked with a sun.
+
+- The location is either coordinates, as in `52.52, 13.40`, or a description of
+  the place.  A description is looked up once with the geocoder of
+  OpenStreetMap, which needs the internet and sends the description there; the
+  coordinates found are kept in the configuration file.
+- The sunset is computed with the equations of NOAA's solar calculator, in the
+  time zone of the computer, which is assumed to be the one of the X1.
+- Everything is kept in the `[sunset]` table of the configuration file; see
+  `girax1.toml.example`.  A switch time following the sunset which was deleted
+  in the Gira app is programmed anew at the next adjustment.
+- The adjustments are run by a timer of the systemd service manager of the
+  user, `girax1-sunset.timer`, which is installed with the first switch time
+  following the sunset or when the settings are saved, and which
+  `x1.py sunset uninstall` removes.  A run missed while the computer was off is
+  made up for when it is on again.  Without `loginctl enable-linger` the timer
+  only runs while the user is logged in.
+
 ## Requirements
 
 - Python 3.12 or later.  The program and the library need nothing beyond the
@@ -93,6 +141,7 @@ some systems (`python3-tkinter` on Fedora).
 - Only `x1info.py`, which talks to the device portal, needs the `cryptography`
   package listed in `requirements.txt`.
 - On Linux, following the desktop appearance uses `gdbus` or `gsettings`.
+- Switch times following the sun need systemd to run the adjustments.
 
 ## Installing as an RPM
 

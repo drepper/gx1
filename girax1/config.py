@@ -191,11 +191,29 @@ def write_settings(source: Path, changes: dict[str, Any]) -> Config:
     is.  The result is checked before it replaces the file, which is left
     alone when the settings would not be valid, and keeps its permissions.
     """
-    text = source.read_text(encoding='utf-8')
+    entries = []
     for name, value in changes.items():
         if name not in SETTINGS:
             raise ConfigError(f'{name} is not a setting that can be changed')
         section, key = name.split('.')
+        entries.append((section, key, value))
+    return write_entries(source, entries)
+
+
+def toml_key(name: str) -> str:
+    """Return a key the way it has to be written in TOML, quoted if need be."""
+    return name if re.fullmatch(r'[A-Za-z0-9_-]+', name) else json.dumps(name, ensure_ascii=False)
+
+
+def write_entries(source: Path, entries: Iterable[tuple[str, str, Any]]) -> Config:
+    """Set or remove entries of any tables and return the configuration as it is then.
+
+    Every entry names the table, the key as written in TOML (see
+    :func:`toml_key`) and the value; None removes the key.  The file is edited
+    as :func:`write_settings` describes, and checked and replaced the same way.
+    """
+    text = source.read_text(encoding='utf-8')
+    for section, key, value in entries:
         text = _set_line(text, section, key, None if value is None else _toml(value))
     try:
         config = _parse(tomllib.loads(text), source)
@@ -253,6 +271,10 @@ def _toml(value: Any) -> str:
         return 'true' if value else 'false'
     if isinstance(value, (int, float)):
         return repr(value)
+    if isinstance(value, (list, tuple)):
+        return f'[{", ".join(_toml(item) for item in value)}]'
+    if isinstance(value, dict):
+        return '{' + ', '.join(f'{toml_key(k)} = {_toml(v)}' for k, v in value.items()) + '}'
     # A JSON string is also a valid basic string in TOML.
     return json.dumps(str(value), ensure_ascii=False)
 

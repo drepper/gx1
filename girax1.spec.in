@@ -85,8 +85,8 @@ C++23 or later.
 install -d %{buildroot}%{_datadir}/%{name}/girax1 %{buildroot}%{_bindir}
 install -p -m 0755 x1.py %{buildroot}%{_datadir}/%{name}/x1.py
 install -p -m 0644 girax1/__init__.py girax1/appearance.py girax1/config.py girax1/gui.py \
-        girax1/project.py girax1/schedule.py girax1/stack.py girax1/timer.py \
-        girax1/websocket.py girax1/x1.py %{buildroot}%{_datadir}/%{name}/girax1/
+        girax1/project.py girax1/schedule.py girax1/stack.py girax1/sunset.py \
+        girax1/timer.py girax1/websocket.py girax1/x1.py %{buildroot}%{_datadir}/%{name}/girax1/
 %py3_shebang_fix %{buildroot}%{_datadir}/%{name}/x1.py
 ln -s ../share/%{name}/x1.py %{buildroot}%{_bindir}/x1
 desktop-file-install --dir=%{buildroot}%{_datadir}/applications \

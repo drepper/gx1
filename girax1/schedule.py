@@ -56,6 +56,20 @@ def parse_days(text: str) -> set[int]:
     return days
 
 
+def days_text(days: set[int]) -> str:
+    """Render days the way :func:`parse_days` reads them, as in ``Mon-Fri,Sun``."""
+    if days == DAY_GROUPS['daily']:
+        return 'daily'
+    ordered = sorted(days)
+    runs: list[tuple[int, int]] = []
+    for day in ordered:
+        if runs and runs[-1][1] == day - 1:
+            runs[-1] = (runs[-1][0], day)
+        else:
+            runs.append((day, day))
+    return ','.join(WEEKDAYS[a] if a == b else f'{WEEKDAYS[a]}-{WEEKDAYS[b]}' for a, b in runs)
+
+
 def parse_time(text: str) -> str:
     """Normalise a time of day to the HH:MM:SS the device stores.
 

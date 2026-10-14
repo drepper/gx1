@@ -46,6 +46,34 @@ verify = false
 
 # ca_cert = "~/.config/girax1-device.pem"
 
+[sunset]
+# Switch times can follow the sunset or the sunrise, with an offset: lights and
+# switches go on at sunset and off at sunrise, coverings down at sunset and up
+# at sunrise.  Such switch times are moved after the sun from time to time, by
+# a timer of systemd which "x1 sunset set" or the setup screen installs.
+#
+# Where the house is: a description of the place, which is looked up once with
+# OpenStreetMap, or coordinates.  Both are kept up by "x1 sunset set --location".
+# location = "Berlin, Deutschland"
+# latitude = 52.5174
+# longitude = 13.3951
+
+# When the switch times are moved after the sunset: the days, as daily,
+# weekdays, weekend or a list such as "Mon,Thu", and the time of day.
+# days = "daily"
+# time = "12:00"
+
+# The switch times following the sun, by device: the index of the switch time,
+# whether it follows the sunrise (the sunset unless the event says so), the
+# offset in minutes (negative for before) and what it does.  Coverings going up
+# also have the time of day before which they are never raised, 06:00 unless
+# another is chosen.  "x1 addtime" and "x1 settime" with a time such as
+# sunset+15 or sunrise-20 keep this up, as does the switch time dialog of the
+# graphical interface.
+# [sunset.times]
+# "Flur/Deckenlampen Flur" = [{index = 3, offset = 15, action = "on"},
+#                             {index = 4, event = "sunrise", offset = -10, action = "off"}]
+
 [blinds]
 # How long a blind needs for the journey from fully open to fully closed, in
 # seconds.  Used for any blind without an entry of its own below.
