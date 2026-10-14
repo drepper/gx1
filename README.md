@@ -116,7 +116,8 @@ going up are never raised before 06:00, or another time chosen with
 In the graphical interface the dialog for a switch time offers "At sunset" or
 "At sunrise", whichever suits the action, with an offset as the alternative to
 a time of day, and the setup screen holds the location and when the switch
-times are moved.  Switch times following the sun are marked with a sun.
+times are moved.  Switch times following the sunset are marked with ☀,
+those following the sunrise with ☼.
 
 - The location is either coordinates, as in `52.52, 13.40`, or a description of
   the place.  A description is looked up once with the geocoder of

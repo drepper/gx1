@@ -1793,7 +1793,11 @@ def _make_modal(dialog: tk.Toplevel, parent: tk.Misc) -> None:
 
 def _sunset_mark(link: sunset.Link | None) -> str:
     """Return how a switch time following the sunset is marked, empty for any other."""
-    return '' if link is None else f'\N{BLACK SUN WITH RAYS} {link.text}'
+    if link is None:
+        return ''
+    sun = ('\N{WHITE SUN WITH RAYS}' if link.event == sunset.SUNRISE
+           else '\N{BLACK SUN WITH RAYS}')
+    return f'{sun} {link.text}'
 
 
 def _license_text() -> str | None:
