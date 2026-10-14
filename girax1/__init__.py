@@ -1,7 +1,7 @@
 """Libraries to control and query Gira X1 systems."""
 
 # The version of the library and the programs, the only place it is kept.
-__version__ = '0.6'
+__version__ = '1.0'
 
 from .config import (DEFAULT_TRAVEL_SECONDS, Config, ConfigError,
                      ensure_travel_entries, load)
