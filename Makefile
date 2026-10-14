@@ -65,7 +65,19 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cc $(LIB_HEADERS) | $(OBJECT_DIRS)
 $(OBJECT_DIRS):
 	mkdir -p $@
 
+# The RPM package holds the Python x1 program.  The sources are taken from the
+# last commit, so changes not yet committed are not part of the package.
+RPM_NAME = girax1
+RPM_VERSION := $(shell sed -n 's/^Version:[[:space:]]*//p' $(RPM_NAME).spec)
+RPM_DIR = $(BUILD_DIR)/rpm
+
+rpm:
+	mkdir -p $(RPM_DIR)/SOURCES
+	git archive --format=tar.gz --prefix=$(RPM_NAME)-$(RPM_VERSION)/ \
+	    -o $(RPM_DIR)/SOURCES/$(RPM_NAME)-$(RPM_VERSION).tar.gz HEAD
+	rpmbuild -ba --define '_topdir $(abspath $(RPM_DIR))' $(RPM_NAME).spec
+
 clean:
 	$(RM) -r $(BUILD_DIR)
 
-.PHONY: all clean
+.PHONY: all clean rpm

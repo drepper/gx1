@@ -1,0 +1,54 @@
+# The script finds its modules in the directory it is in, which the -P flag
+# Python is normally started with in a package would prevent.
+%global py3_shebang_flags s
+
+Name:           girax1
+Version:        0.1
+Release:        1%{?dist}
+Summary:        Control a Gira X1 from the command line or a small GUI
+
+License:        LicenseRef-Not-Specified
+Source0:        %{name}-%{version}.tar.gz
+
+BuildArch:      noarch
+BuildRequires:  python3-devel
+
+# tomllib and typing.Self are needed.
+Requires:       python3 >= 3.11
+# Only the gui command needs Tk.
+Recommends:     python3-tkinter
+
+%description
+The x1 program controls and queries a Gira X1 over its Device Stack API:
+switching and dimming lights, driving coverings, showing the status of
+devices and programming their switch times.  The connection details are
+read from ~/.config/girax1.toml.
+
+%prep
+%autosetup
+
+%build
+# Nothing to build.
+
+%install
+# The library modules x1 needs are kept in a private directory instead of
+# the system site-packages.  The program in the bin directory is a symbolic
+# link to the script, and Python resolves it when setting up the search
+# path, so the modules next to the script are found.
+install -d %{buildroot}%{_datadir}/%{name}/girax1 %{buildroot}%{_bindir}
+install -p -m 0755 x1.py %{buildroot}%{_datadir}/%{name}/x1.py
+install -p -m 0644 girax1/__init__.py girax1/config.py girax1/gui.py \
+        girax1/project.py girax1/schedule.py girax1/stack.py girax1/timer.py \
+        girax1/websocket.py girax1/x1.py %{buildroot}%{_datadir}/%{name}/girax1/
+%py3_shebang_fix %{buildroot}%{_datadir}/%{name}/x1.py
+ln -s ../share/%{name}/x1.py %{buildroot}%{_bindir}/x1
+%py_byte_compile %{python3} %{buildroot}%{_datadir}/%{name}
+
+%files
+%doc girax1.toml.example
+%{_bindir}/x1
+%{_datadir}/%{name}
+
+%changelog
+* Wed Oct 14 2026 Ulrich Drepper <github@akkadia.org> - 0.1-1
+- First package, holding the x1 program.
