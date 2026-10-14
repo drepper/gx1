@@ -98,11 +98,16 @@ some systems (`python3-tkinter` on Fedora).
 
     make rpm
 
-builds a package from the last commit, with the version defined in
-`girax1/__init__.py`.  The result is in `build/rpm/RPMS/noarch/`.  It installs
-the program as `/usr/bin/x1` together with a desktop entry, so the interface can
-be started from the desktop's application menu.  `make rpm RPM_COMMIT=TAG`
-packages a different commit, for example a release tag.
+builds packages from the working tree, with the version defined in
+`girax1/__init__.py`; changes need not be committed first, but new files must
+not be ignored by git.  The results are in `build/rpm/RPMS/`:
+
+- `girax1` installs the program as `/usr/bin/x1` together with a desktop entry,
+  so the interface can be started from the desktop's application menu.
+- `girax1-libs` holds the shared C++ library.
+- `girax1-devel` holds what is needed to build C++ programs with the library:
+  the headers, the static library, the link to the shared one and a
+  pkg-config file.
 
 ## The C++ implementation
 
@@ -113,7 +118,22 @@ toml++:
 
     make
 
-builds `build/x1`; nothing is written next to the sources.
+builds `build/x1` and the library, as `build/libgirax1.a` and
+`build/libgirax1-VERSION.so`; nothing is written next to the sources.
+
+    make install prefix=/usr libdir=/usr/lib64
+
+installs the library, its headers and a pkg-config file (the program is not
+installed, since the Python one has that name).  `DESTDIR` installs into a
+staging directory.  Programs using the library need C++23 or later and build
+with
+
+    g++ -std=c++23 program.cc $(pkg-config --cflags --libs girax1)
+
+The shared library's soname, `libgirax1.so.1`, names its interface rather than
+the version.  It only changes when `SOVERSION` in the `Makefile` is raised,
+which is needed whenever a change breaks programs built against an earlier
+version.
 
 ## Development helpers
 

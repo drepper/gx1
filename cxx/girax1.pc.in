@@ -1,0 +1,12 @@
+# pkg-config description of the girax1 library; make install fills it in.
+prefix=@PREFIX@
+libdir=@LIBDIR@
+includedir=@INCLUDEDIR@
+
+Name: girax1
+Description: Control a Gira X1 over its Device Stack API
+Version: @VERSION@
+# The headers use the types of both, so programs need their headers too.
+Requires: @REQUIRES@
+Cflags: -I${includedir}
+Libs: -L${libdir} -lgirax1

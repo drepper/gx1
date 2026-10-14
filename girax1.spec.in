@@ -12,9 +12,16 @@ Summary:        Control a Gira X1 from the command line or a small GUI
 License:        CC-BY-NC-ND-4.0
 Source0:        %{name}-%{version}.tar.gz
 
-BuildArch:      noarch
+# The C++ library makes the build specific to the architecture.  RPM cannot
+# have the main package noarch while subpackages are not, so the x1 program
+# is built for an architecture as well, even though it is written in Python.
 BuildRequires:  python3-devel
 BuildRequires:  desktop-file-utils
+BuildRequires:  gcc-c++
+BuildRequires:  make
+BuildRequires:  pkgconfig(gnutls)
+BuildRequires:  pkgconfig(jsoncpp)
+BuildRequires:  tomlplusplus-devel
 
 # The type parameter syntax of generic functions needs Python 3.12.
 Requires:       python3 >= 3.12
@@ -29,13 +36,33 @@ switching and dimming lights, driving coverings, showing the status of
 devices and programming their switch times.  The connection details are
 read from ~/.config/girax1.toml.
 
+%package libs
+Summary:        C++ library to control a Gira X1
+
+%description libs
+A C++ library to control and query a Gira X1 over its Device Stack API, the
+protocol the Gira Smart Home app uses: reading the project, switching and
+dimming lights, driving coverings and programming switch times.
+
+%package devel
+Summary:        Files to build programs with the girax1 C++ library
+Requires:       %{name}-libs%{?_isa} = %{version}-%{release}
+
+%description devel
+Headers, the shared library link, the static library and the pkg-config file
+needed to build C++ programs which use the girax1 library.  The headers need
+C++23 or later.
+
 %prep
 %autosetup
 
 %build
-# Nothing to build.
+# Only the library; the C++ version of the x1 program is not packaged, since
+# the Python one is installed under that name.
+%make_build lib
 
 %install
+%make_install prefix=%{_prefix} libdir=%{_libdir} includedir=%{_includedir}
 # The library modules x1 needs are kept in a private directory instead of
 # the system site-packages.  The program in the bin directory is a symbolic
 # link to the script, and Python resolves it when setting up the search
@@ -58,12 +85,26 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/org.akkadia.girax1.de
 
 %files
 %license LICENSE
-%doc girax1.toml.example
+%doc README.md girax1.toml.example
 %{_bindir}/x1
 %{_datadir}/%{name}
 %{_datadir}/applications/org.akkadia.girax1.desktop
 %{_datadir}/icons/hicolor/scalable/apps/org.akkadia.girax1.svg
 
+%files libs
+%license LICENSE
+%{_libdir}/libgirax1.so.1
+%{_libdir}/libgirax1-%{version}.so
+
+%files devel
+%{_includedir}/girax1/
+%{_libdir}/libgirax1.so
+%{_libdir}/libgirax1.a
+%{_libdir}/pkgconfig/girax1.pc
+
 %changelog
+* Wed Oct 14 2026 Ulrich Drepper <github@akkadia.org> - 0.2-1
+- Add the C++ library in the libs and devel subpackages.
+
 * Wed Oct 14 2026 Ulrich Drepper <github@akkadia.org> - 0.1-1
 - First package, holding the x1 program.
