@@ -14,11 +14,14 @@ Source0:        %{name}-%{version}.tar.gz
 
 BuildArch:      noarch
 BuildRequires:  python3-devel
+BuildRequires:  desktop-file-utils
 
 # tomllib and typing.Self are needed.
 Requires:       python3 >= 3.11
 # Only the gui command needs Tk.
 Recommends:     python3-tkinter
+# Owns the directories the icon is installed into.
+Requires:       hicolor-icon-theme
 
 %description
 The x1 program controls and queries a Gira X1 over its Device Stack API:
@@ -44,12 +47,21 @@ install -p -m 0644 girax1/__init__.py girax1/appearance.py girax1/config.py gira
         girax1/websocket.py girax1/x1.py %{buildroot}%{_datadir}/%{name}/girax1/
 %py3_shebang_fix %{buildroot}%{_datadir}/%{name}/x1.py
 ln -s ../share/%{name}/x1.py %{buildroot}%{_bindir}/x1
+desktop-file-install --dir=%{buildroot}%{_datadir}/applications \
+        data/org.akkadia.girax1.desktop
+install -D -p -m 0644 data/org.akkadia.girax1.svg \
+        %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/org.akkadia.girax1.svg
 %py_byte_compile %{python3} %{buildroot}%{_datadir}/%{name}
+
+%check
+desktop-file-validate %{buildroot}%{_datadir}/applications/org.akkadia.girax1.desktop
 
 %files
 %doc girax1.toml.example
 %{_bindir}/x1
 %{_datadir}/%{name}
+%{_datadir}/applications/org.akkadia.girax1.desktop
+%{_datadir}/icons/hicolor/scalable/apps/org.akkadia.girax1.svg
 
 %changelog
 * Wed Oct 14 2026 Ulrich Drepper <github@akkadia.org> - 0.1-1

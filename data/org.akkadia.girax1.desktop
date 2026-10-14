@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Gira X1
+GenericName=Home Automation Control
+Comment=Switch lights, move blinds and program switch times of a Gira X1
+Exec=x1
+Icon=org.akkadia.girax1
+Terminal=false
+Categories=Utility;
+Keywords=KNX;Gira;Smart Home;Light;Blinds;Timer;
+StartupNotify=false
+StartupWMClass=Girax1

@@ -18,6 +18,7 @@ the settings of the configuration file.
 
 import math
 import platform
+import sys
 import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import filedialog, messagebox, ttk
@@ -78,6 +79,15 @@ APPEARANCE_LABELS = ((appearance.LIGHT, 'Light'), (appearance.DARK, 'Dark'),
 
 # What can go wrong while programming a switch time.
 SCHEDULE_ERRORS = (ValueError, schedule.ScheduleError, girax1.X1Error, TimeoutError)
+
+# The window class, which the desktop file names so that the desktop matches
+# the window to it, and the name of the icon.  Tk capitalises the class.
+WINDOW_CLASS = 'girax1'
+ICON_NAME = 'org.akkadia.girax1'
+ICON_FILES = (Path(__file__).resolve().parent.parent / 'data' / f'{ICON_NAME}.svg',
+              Path(sys.prefix) / 'share' / 'icons' / 'hicolor' / 'scalable' / 'apps'
+              / f'{ICON_NAME}.svg')
+ICON_SIZE = 64
 
 # Devices not assigned to any room are collected under this heading.
 OTHER_ROOM = 'Elsewhere'
@@ -333,7 +343,7 @@ class Application(tk.Tk):
 
     def __init__(self, stack: Stack, project: Project) -> None:
         """Set up the window and show the rooms."""
-        super().__init__()
+        super().__init__(className=WINDOW_CLASS)
         self.stack = stack
         self.project = project
         self.values: dict[str, str] = {}
@@ -359,6 +369,7 @@ class Application(tk.Tk):
         self.style = ttk.Style(self)
 
         self.title('Gira X1')
+        self._set_icon()
         self.geometry('960x680')
         self.minsize(640, 480)
 
@@ -590,6 +601,24 @@ class Application(tk.Tk):
         for tile in self.tiles:
             rows.setdefault(tile.row, []).append(tile)
         return rows
+
+    def _set_icon(self) -> None:
+        """Give the window the icon of the program, from the sources or as installed.
+
+        Reading SVG needs Tk 8.7 or later; with an older one the window keeps
+        the icon the desktop gives it.
+        """
+        for path in ICON_FILES:
+            if not path.is_file():
+                continue
+            try:
+                # The image has to be kept, or Tk drops it.
+                self.icon = tk.PhotoImage(file=str(path),
+                                          format=f'svg -scaletoheight {ICON_SIZE}')
+            except tk.TclError:
+                return
+            self.iconphoto(True, self.icon)
+            return
 
     # ------------------------------------------------------------- appearance
 

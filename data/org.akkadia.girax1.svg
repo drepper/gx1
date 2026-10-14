@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Icon of the Gira X1 controller: the round light switch of the interface,
+     ringed by its brightness, with a house standing for the home it controls. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#34475a"/>
+      <stop offset="1" stop-color="#1d2733"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="26" fill="url(#ground)"/>
+  <!-- Three quarters of a circle from the lower left over the top to the lower right. -->
+  <path d="M 35.72 92.28 A 40 40 0 1 1 92.28 92.28" fill="none" stroke="#5b6672"
+        stroke-width="10" stroke-linecap="round"/>
+  <!-- The brightness, at 75 percent. -->
+  <path d="M 35.72 92.28 A 40 40 0 1 1 100.96 48.69" fill="none" stroke="#f9a825"
+        stroke-width="10" stroke-linecap="round"/>
+  <circle cx="64" cy="64" r="27" fill="#2e7d32"/>
+  <path d="M 64 45 L 83 61 L 77 61 L 77 78 L 68 78 L 68 67 L 60 67 L 60 78 L 51 78 L 51 61 L 45 61 Z"
+        fill="#ffffff"/>
+</svg>
