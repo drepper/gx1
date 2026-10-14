@@ -9,7 +9,7 @@ Version:        @VERSION@
 Release:        1%{?dist}
 Summary:        Control a Gira X1 from the command line or a small GUI
 
-License:        LicenseRef-Not-Specified
+License:        CC-BY-NC-ND-4.0
 Source0:        %{name}-%{version}.tar.gz
 
 BuildArch:      noarch
@@ -57,6 +57,7 @@ install -D -p -m 0644 data/org.akkadia.girax1.svg \
 desktop-file-validate %{buildroot}%{_datadir}/applications/org.akkadia.girax1.desktop
 
 %files
+%license LICENSE
 %doc girax1.toml.example
 %{_bindir}/x1
 %{_datadir}/%{name}

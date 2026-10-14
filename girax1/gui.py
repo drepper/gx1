@@ -853,7 +853,8 @@ class AboutDialog(tk.Toplevel):
         ttk.Label(body, text=f'Version {girax1.__version__}').pack(anchor='w', pady=(2, 10))
         ttk.Label(body, text='Controls the lights, blinds and switch times of a Gira X1.'
                   ).pack(anchor='w')
-        ttk.Label(body, text='Written by Ulrich Drepper.').pack(anchor='w', pady=(2, 10))
+        ttk.Label(body, text='Written by Ulrich Drepper.').pack(anchor='w', pady=(2, 0))
+        ttk.Label(body, text='Licensed under CC BY-NC-ND 4.0.').pack(anchor='w', pady=(0, 10))
         settings = app.stack.config
         for line in (f'Connected to {settings.host}',
                      f'Settings in {settings.source}' if settings.source is not None else '',
