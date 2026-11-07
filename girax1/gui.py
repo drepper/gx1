@@ -14,6 +14,10 @@ also follows changes made from a wall switch or from the Gira app.
 The interface is shown light or dark, or follows the desktop, as chosen from the
 menu on the room selection screen.  The same menu leads to a setup screen for
 the settings of the configuration file.
+
+With an MQTT broker configured, the interface also takes commands from it, see
+:mod:`girax1.mqtt` and :class:`RemoteControl`.  It can start minimized, to run
+in the background for that.
 """
 
 import math
@@ -27,7 +31,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import girax1
-from . import appearance, config, schedule, sunset, x11
+from . import appearance, config, mqtt, schedule, sunset, times, x11
 from .appearance import Palette
 from .project import (BRIGHTNESS_POINT, COVER_POINT, STOP_POINT, SWITCH_POINT, Device,
                       Project)
@@ -72,6 +76,9 @@ TIMES_SHOWN = 10
 
 # The length of the slider choosing what a switch time does to a light.
 SLIDER_LENGTH = 200
+
+# How often to look for commands which arrived over MQTT.
+REMOTE_POLL_MS = 200
 
 # How often to check whether looking up a location is done.
 LOOKUP_POLL_MS = 100
@@ -436,6 +443,12 @@ class Application(tk.Tk):
         self.after(POLL_INTERVAL_MS, self._pump)
         self.after(APPEARANCE_POLL_MS, self._follow_system)
 
+        # Commands over MQTT, if a broker is configured.
+        self.remote = RemoteControl(self)
+        self.listener: mqtt.Listener | None = None
+        self.start_listener(stack.config.mqtt)
+        self.after(REMOTE_POLL_MS, self._pump_remote)
+
     # ------------------------------------------------------------------ views
 
     def show_rooms(self) -> None:
@@ -551,6 +564,7 @@ class Application(tk.Tk):
                                  f'failed: {e}\n\nThe connection made with the previous '
                                  f'settings stays in use.', parent=self)
             return
+        mqtt_changed = settings.mqtt != self.stack.config.mqtt
         self.stack.close()
         self.stack = stack
         self.project = project
@@ -558,6 +572,8 @@ class Application(tk.Tk):
         self.timers = {}
         self.reload_values()
         self.note(f'settings saved, connected to {settings.host}')
+        if mqtt_changed:
+            self.start_listener(settings.mqtt)
 
     def _clear(self) -> None:
         """Remove everything from the body of the window."""
@@ -601,20 +617,28 @@ class Application(tk.Tk):
             if tile.device.view_id == device.view_id:
                 tile.show_timer(timer)
 
-    def _write(self, device: Device, point_name: str, action) -> None:
-        """Run one write, reporting a refusal instead of letting it escape."""
+    def perform(self, device: Device, point_name: str, action) -> str:
+        """Run one write and show its result; return the value written, as a person reads it.
+
+        A device without the data point raises :class:`ValueError`, a refusal of
+        the X1 :class:`girax1.X1Error`.
+        """
         point = device.point(point_name)
         if point is None or not point.usable:
-            self.note(f'{device.name} has no {point_name} data point')
-            return
-        try:
-            reply = action(point.point_id)
-        except (girax1.X1Error, TimeoutError) as e:
-            self.note(f'{device.name}: {e}')
-            return
+            raise ValueError(f'{device.name} has no {point_name} data point')
+        reply = action(point.point_id)
         self.values[str(point.point_id)] = str(reply.get('value', ''))
-        self.note(f'{device.name}: {point_name} {_readable(point_name, str(reply.get("value")))}')
+        state = _readable(point_name, str(reply.get('value')))
+        self.note(f'{device.name}: {point_name} {state}')
         self.refresh()
+        return state
+
+    def _write(self, device: Device, point_name: str, action) -> None:
+        """Run one write, reporting a refusal instead of letting it escape."""
+        try:
+            self.perform(device, point_name, action)
+        except (ValueError, girax1.X1Error, TimeoutError) as e:
+            self.note(str(e) if isinstance(e, ValueError) else f'{device.name}: {e}')
 
     # ---------------------------------------------------------------- updates
 
@@ -679,7 +703,7 @@ class Application(tk.Tk):
         looks = tk.Menu(menu, **options)
         for choice, label in APPEARANCE_LABELS:
             looks.add_radiobutton(label=label, value=choice, variable=self.appearance,
-                                  command=self._choose_appearance)
+                                  command=self.choose_appearance)
         menu.add_cascade(label='Appearance', menu=looks)
         menu.add_command(label='Setup\N{HORIZONTAL ELLIPSIS}', command=self.show_setup)
         menu.add_separator()
@@ -688,7 +712,7 @@ class Application(tk.Tk):
         menu.add_command(label='Quit', accelerator='Ctrl+Q', command=self.destroy)
         menu.tk_popup(button.winfo_rootx(), button.winfo_rooty() + button.winfo_height())
 
-    def _choose_appearance(self) -> None:
+    def choose_appearance(self) -> None:
         """Switch to the appearance chosen in the menu and remember it."""
         appearance.save(self.appearance.get())
         self._use_palette(appearance.palette(self.appearance.get()))
@@ -849,6 +873,82 @@ class Application(tk.Tk):
         if changed:
             self.refresh()
         self.after(POLL_INTERVAL_MS, self._pump)
+
+    # ----------------------------------------------------------------- remote
+
+    def start_listener(self, settings: config.MqttConfig | None) -> None:
+        """Take commands from an MQTT broker, or stop doing so without one."""
+        self.stop_listener()
+        if settings is None:
+            return
+        listener = mqtt.Listener(settings)
+        try:
+            listener.start()
+        except ImportError:
+            self.note('commands over MQTT need paho-mqtt, which is not installed')
+            return
+        except (OSError, ValueError) as e:
+            self.note(f'cannot use the MQTT broker {settings.server}: {e}')
+            return
+        self.listener = listener
+
+    def stop_listener(self) -> None:
+        """Stop taking commands over MQTT."""
+        if self.listener is not None:
+            self.listener.stop()
+            self.listener = None
+
+    def _pump_remote(self) -> None:
+        """Carry out the commands which arrived over MQTT and answer them."""
+        try:
+            if (listener := self.listener) is not None:
+                for event in listener.events():
+                    self._remote_event(listener, event)
+        finally:
+            # A command which went wrong must not stop the commands after it.
+            try:
+                self.after(REMOTE_POLL_MS, self._pump_remote)
+            except tk.TclError:
+                pass  # the window is gone
+
+    def _remote_event(self, listener: mqtt.Listener, event: mqtt.Event) -> None:
+        """Act on one event of the connection to the broker."""
+        if event.kind == 'connected':
+            self.note(f'taking commands on {listener.settings.topic} from '
+                      f'{listener.settings.server}')
+        elif event.kind == 'disconnected':
+            self.note(f'lost the MQTT broker {listener.settings.server}: {event.error}')
+        elif event.command is None:
+            listener.reply({'ok': False, 'error': event.error})
+        else:
+            try:
+                answer = self.remote.handle(event.command)
+            except Exception as e:
+                # A mistake of this program; the sender still learns of it.
+                answer = {'command': event.command.get('command'), 'ok': False,
+                          'error': f'internal error: {e!r}'}
+                if 'id' in event.command:
+                    answer['id'] = event.command['id']
+            listener.reply(answer)
+
+    def show_window(self) -> None:
+        """Bring the window up, from being minimized or behind others.
+
+        Tk does not learn that a window minimized before it was ever shown is
+        minimized, and then takes deiconifying it for nothing to do.  Taking
+        the window down first makes that work, but would make a window which
+        is up flicker, so it is only done for one the window manager keeps
+        minimized.
+        """
+        if x11.is_iconic(self) or self.state() == 'iconic':
+            self.withdraw()
+        self.deiconify()
+        self.lift()
+
+    def destroy(self) -> None:
+        """Close the window, and with it the connection to the MQTT broker."""
+        self.stop_listener()
+        super().destroy()
 
     # ---------------------------------------------------------------- helpers
 
@@ -1270,7 +1370,7 @@ class SetupForm(ttk.Frame):
             try:
                 self.sun = sunset.configure(self.source, **sun_changes)
                 # The timer runs on the control node only.
-                sunset.sync_timer(self.source, Path(sys.argv[0]).absolute())
+                sunset.sync_timer(self.source, _program())
             except (ValueError, sunset.SunsetError) as e:
                 messagebox.showerror('Setup', f'The sunset settings are not saved completely: '
                                      f'{e}', parent=self)
@@ -1303,6 +1403,308 @@ class SetupForm(ttk.Frame):
                 variable.set('' if value is None else str(value))
         self.sun = self.app.sunset_settings = self.app.load_sunset()
         self._fill_sunset()
+
+
+class RemoteControl:
+    """Carries out the commands which arrive over MQTT, as the interface would.
+
+    Every command is a JSON object with a ``command`` and the fields it needs;
+    an ``id`` is repeated in the answer.  Devices are named as on the command
+    line: by path, by bare name, by room with a trailing slash, or by pattern,
+    and where several make sense also as a list of those.
+
+    ``on``, ``off``, ``up``, ``down``, ``stop`` (``device``),
+    ``dim`` (``device``, ``brightness``)
+        switch, dim or drive devices
+    ``status`` (``device`` optional)
+        the current values of devices, all without a device
+    ``timers`` (``device``)
+        the switch times of one device
+    ``addtime`` (``device``, ``time``, ``action``, ``days``, ``active``, ``not_before``)
+        program a switch time; the time is a time of day or one following the
+        sun such as ``sunset+15``; days default to daily, active to true
+    ``settime`` (``device``, ``index``, and what is to change of ``time``,
+    ``days``, ``action``, ``active``, ``not_before``)
+        change a switch time
+    ``deltime`` (``device``, ``index``)
+        delete a switch time
+    ``rooms``, ``room`` (``name``), ``page`` (``page``: a number, ``next`` or
+    ``previous``)
+        what the window shows
+    ``appearance`` (``value``: ``light``, ``dark`` or ``auto``)
+        the look of the interface
+    ``show``, ``minimize``, ``quit``
+        the window
+    """
+
+    def __init__(self, app: 'Application') -> None:
+        """Act through the interface given."""
+        self.app = app
+
+    def handle(self, command: dict[str, Any]) -> dict[str, Any]:
+        """Carry out a command and return the answer to it."""
+        name = str(command.get('command', '')).strip().lower()
+        answer: dict[str, Any] = {'command': name}
+        if 'id' in command:
+            answer['id'] = command['id']
+        handler = getattr(self, f'_do_{name}', None) if name.isidentifier() else None
+        try:
+            if handler is None:
+                raise mqtt.CommandError(f'unknown command {name!r}')
+            answer |= handler(command)
+            answer.setdefault('ok', True)
+        except (mqtt.CommandError, ValueError, sunset.SunsetError, config.ConfigError,
+                schedule.ScheduleError, girax1.X1Error, TimeoutError) as e:
+            answer |= {'ok': False, 'error': str(e)}
+        self.app.note(f'MQTT {name}: {"done" if answer["ok"] else answer.get("error")}')
+        return answer
+
+    # ----------------------------------------------------------- devices
+
+    def _do_on(self, command: dict[str, Any]) -> dict[str, Any]:
+        return self._each(command, SWITCH_POINT, lambda i: self.app.stack.switch(i, True))
+
+    def _do_off(self, command: dict[str, Any]) -> dict[str, Any]:
+        return self._each(command, SWITCH_POINT, lambda i: self.app.stack.switch(i, False))
+
+    def _do_dim(self, command: dict[str, Any]) -> dict[str, Any]:
+        brightness = command.get('brightness')
+        if isinstance(brightness, bool) or not isinstance(brightness, (int, float)) \
+                or not 0 <= brightness <= BRIGHTNESS_MAX:
+            raise mqtt.CommandError(f'"brightness" must be a number from 0 to {BRIGHTNESS_MAX}')
+        return self._each(command, BRIGHTNESS_POINT,
+                          lambda i: self.app.stack.dim(i, round(brightness)))
+
+    def _do_up(self, command: dict[str, Any]) -> dict[str, Any]:
+        return self._each(command, COVER_POINT, lambda i: self.app.stack.move(i, False))
+
+    def _do_down(self, command: dict[str, Any]) -> dict[str, Any]:
+        return self._each(command, COVER_POINT, lambda i: self.app.stack.move(i, True))
+
+    def _do_stop(self, command: dict[str, Any]) -> dict[str, Any]:
+        answer = self._each(command, STOP_POINT, lambda i: self.app.stack.stop(i))
+        # The value written only triggers the halt; it says nothing more.
+        for result in answer['results']:
+            if result['ok']:
+                result['state'] = 'stopped'
+        return answer
+
+    def _do_status(self, command: dict[str, Any]) -> dict[str, Any]:
+        devices = self._devices(command) if 'device' in command else list(self.app.project)
+        self.app.reload_values()
+        self.app.refresh()
+        return {'devices': [{'device': self.app.project.path(device), 'kind': device.kind,
+                             'values': {point.name: _remote_value(
+                                 point.name, self.app.values.get(str(point.point_id)))
+                                 for point in device.usable_points
+                                 if point.name not in TRIGGER_POINTS}}
+                            for device in devices]}
+
+    def _each(self, command: dict[str, Any], point_name: str, action) -> dict[str, Any]:
+        """Write to the data point of every device named, as the interface does.
+
+        Of several devices, those without the data point are passed over, as a
+        room is mostly made of devices of other kinds; a single one is an error.
+        """
+        devices = self._devices(command)
+        if len(devices) > 1:
+            devices = [d for d in devices
+                       if (point := d.point(point_name)) is not None and point.usable]
+            if not devices:
+                raise mqtt.CommandError(f'none of the devices has a {point_name} data point')
+        results = []
+        for device in devices:
+            result: dict[str, Any] = {'device': self.app.project.path(device)}
+            try:
+                result |= {'ok': True, 'state': self.app.perform(device, point_name, action)}
+            except (ValueError, girax1.X1Error, TimeoutError) as e:
+                result |= {'ok': False, 'error': str(e)}
+            results.append(result)
+        answer: dict[str, Any] = {'ok': all(r['ok'] for r in results), 'results': results}
+        if not answer['ok']:
+            answer['error'] = '; '.join(f'{r["device"]}: {r["error"]}'
+                                        for r in results if not r['ok'])
+        return answer
+
+    # ------------------------------------------------------ switch times
+
+    def _do_timers(self, command: dict[str, Any]) -> dict[str, Any]:
+        device, path = self._device(command)
+        if not device.timer_channel:
+            raise mqtt.CommandError(f'{path} has no timer')
+        return {'device': path, 'times': self._times(device, path,
+                                                     self.app.stack.timer(device.timer_channel))}
+
+    def _do_addtime(self, command: dict[str, Any]) -> dict[str, Any]:
+        device, path = self._device(command)
+        timer, index = times.add(self.app.stack, self._source(), device, path,
+                                 self._text(command, 'time'), self._text(command, 'action'),
+                                 self._days(command) or set(range(len(WEEKDAYS))),
+                                 self._flag(command, 'active', True) is not False,
+                                 self._text(command, 'not_before', None), _program())
+        return self._changed(device, path, timer, index)
+
+    def _do_settime(self, command: dict[str, Any]) -> dict[str, Any]:
+        device, path = self._device(command)
+        index = self._index(command)
+        timer = times.change(self.app.stack, self._source(), device, path, index,
+                             when=self._text(command, 'time', None), days=self._days(command),
+                             active=self._flag(command, 'active', None),
+                             action=self._text(command, 'action', None),
+                             not_before=self._text(command, 'not_before', None),
+                             program=_program())
+        return self._changed(device, path, timer, index)
+
+    def _do_deltime(self, command: dict[str, Any]) -> dict[str, Any]:
+        device, path = self._device(command)
+        timer = times.delete(self.app.stack, self._source(), device, path, self._index(command))
+        return self._changed(device, path, timer, None)
+
+    def _changed(self, device: Device, path: str, timer: Timer,
+                 index: int | None) -> dict[str, Any]:
+        """Show changed switch times, also in a window open for them, and describe them."""
+        app = self.app
+        app.sunset_settings = app.load_sunset()
+        app.update_timer(device, timer)
+        for window in app.winfo_children():
+            if isinstance(window, TimesDialog) and window.device.view_id == device.view_id:
+                window.show(timer)
+        listed = self._times(device, path, timer)
+        answer: dict[str, Any] = {'device': path, 'times': listed}
+        if index is not None:
+            answer['index'] = index
+        return answer
+
+    def _times(self, device: Device, path: str, timer: Timer) -> list[dict[str, Any]]:
+        """Describe the switch times of a device."""
+        found = []
+        for entry in sorted(timer.switch_times, key=lambda e: e.time):
+            link = self.app.sunset_settings.link(path, entry.index)
+            found.append({'index': entry.index, 'time': entry.time[:5], 'days': entry.days,
+                          'action': _what(timer, entry, self.app.project, device),
+                          'active': entry.active,
+                          'sun': None if link is None else link.text})
+        return found
+
+    # ------------------------------------------------------------- window
+
+    def _do_rooms(self, _command: dict[str, Any]) -> dict[str, Any]:
+        self.app.show_rooms()
+        return {}
+
+    def _do_room(self, command: dict[str, Any]) -> dict[str, Any]:
+        wanted = self._text(command, 'name').lower()
+        name = next((n for n, _ in self.app.rooms if n.lower() == wanted), None)
+        if name is None:
+            raise mqtt.CommandError(f'there is no room {command["name"]!r}; there are '
+                                    + ', '.join(n for n, _ in self.app.rooms))
+        self.app.show_room(name)
+        return {'room': name}
+
+    def _do_page(self, command: dict[str, Any]) -> dict[str, Any]:
+        app = self.app
+        if app.room is None:
+            raise mqtt.CommandError('no room is shown')
+        page = command.get('page')
+        if page in ('next', 'previous'):
+            app.turn(1 if page == 'next' else -1)
+        elif isinstance(page, int) and not isinstance(page, bool) and 1 <= page <= len(app.pages):
+            app.turn(page - 1 - app.page)
+        else:
+            raise mqtt.CommandError(f'"page" must be next, previous or a number from 1 to '
+                                    f'{len(app.pages)}')
+        return {'page': app.page + 1, 'pages': len(app.pages)}
+
+    def _do_appearance(self, command: dict[str, Any]) -> dict[str, Any]:
+        value = self._text(command, 'value').lower()
+        if value not in appearance.CHOICES:
+            raise mqtt.CommandError(f'"value" must be one of {", ".join(appearance.CHOICES)}')
+        self.app.appearance.set(value)
+        self.app.choose_appearance()
+        return {'value': value}
+
+    def _do_show(self, _command: dict[str, Any]) -> dict[str, Any]:
+        self.app.show_window()
+        return {}
+
+    def _do_minimize(self, _command: dict[str, Any]) -> dict[str, Any]:
+        self.app.iconify()
+        return {}
+
+    def _do_quit(self, _command: dict[str, Any]) -> dict[str, Any]:
+        # The answer goes out first; the window closes once it is sent.
+        self.app.after(REMOTE_POLL_MS, self.app.destroy)
+        return {}
+
+    # ------------------------------------------------------------ helpers
+
+    def _devices(self, command: dict[str, Any]) -> list[Device]:
+        """Return the devices a command names, as one or a list of paths or patterns."""
+        named = command.get('device')
+        patterns = [named] if isinstance(named, str) else named
+        if not isinstance(patterns, list) or not patterns \
+                or not all(isinstance(p, str) for p in patterns):
+            raise mqtt.CommandError('"device" must be a device path or pattern, or a list of them')
+        devices: list[Device] = []
+        for pattern in patterns:
+            if not (found := self.app.project.resolve(pattern)):
+                raise mqtt.CommandError(f'no device matches {pattern!r}')
+            devices += (d for d in found if d not in devices)
+        return devices
+
+    def _device(self, command: dict[str, Any]) -> tuple[Device, str]:
+        """Return the one device a command names, with its path."""
+        if not isinstance(command.get('device'), str):
+            raise mqtt.CommandError('"device" must name one device')
+        devices = self._devices(command)
+        if len(devices) != 1:
+            raise mqtt.CommandError(f'{command["device"]!r} matches {len(devices)} devices, '
+                                    f'name exactly one')
+        return devices[0], self.app.project.path(devices[0])
+
+    @staticmethod
+    def _text(command: dict[str, Any], key: str, default: Any = ...) -> Any:
+        """Return a text field of a command; without a default it is required."""
+        value = command.get(key, default)
+        if value is ...:
+            raise mqtt.CommandError(f'"{key}" is missing')
+        if value is not None and value is not default and not isinstance(value, str):
+            raise mqtt.CommandError(f'"{key}" must be a string')
+        return value
+
+    @staticmethod
+    def _flag(command: dict[str, Any], key: str, default: bool | None) -> bool | None:
+        """Return a true or false field of a command."""
+        value = command.get(key, default)
+        if value is not None and not isinstance(value, bool):
+            raise mqtt.CommandError(f'"{key}" must be true or false')
+        return value
+
+    @staticmethod
+    def _index(command: dict[str, Any]) -> int:
+        """Return the index of a switch time a command names."""
+        index = command.get('index')
+        if isinstance(index, bool) or not isinstance(index, int) or index <= 0:
+            raise mqtt.CommandError('"index" must be the positive number of a switch time')
+        return index
+
+    @staticmethod
+    def _days(command: dict[str, Any]) -> set[int] | None:
+        """Return the days of a command: daily, weekdays, Mon-Fri, or a list of day names."""
+        days = command.get('days')
+        if days is None:
+            return None
+        if isinstance(days, list) and all(isinstance(d, str) for d in days):
+            days = ','.join(days)
+        if not isinstance(days, str):
+            raise mqtt.CommandError('"days" must be a string such as "Mon-Fri" or a list of days')
+        return schedule.parse_days(days)
+
+    def _source(self) -> Path:
+        """Return the configuration file, which records switch times following the sun."""
+        if (source := self.app.stack.config.source) is None:
+            raise sunset.SunsetError('the settings did not come from a file')
+        return source
 
 
 class TimesDialog(tk.Toplevel):
@@ -1762,7 +2164,7 @@ class TimeEditor(tk.Toplevel):
                 active=None if self.active.get() == self.entry.active else self.active.get(),
                 what=None if not what or what == self.original_what else what,
                 earliest=self._earliest(), event=self._event())
-        if sunset.ensure_timer(source, Path(sys.argv[0]).absolute()):
+        if sunset.ensure_timer(source, _program()):
             app.note('installed the timer which moves switch times after the sunset')
         return timer, index
 
@@ -1801,6 +2203,24 @@ def _make_modal(dialog: tk.Toplevel, parent: tk.Misc) -> None:
         parent.focus_set()
 
     dialog.bind('<Destroy>', closed, add='+')
+
+
+def _remote_value(name: str, value: str | None) -> Any:
+    """Return a data point value as it is answered over MQTT."""
+    if value is None or value in ('', 'None'):
+        return None
+    if name == SWITCH_POINT:
+        return {'0': 'off', '1': 'on'}.get(value, value)
+    if name == BRIGHTNESS_POINT:
+        return _number(value)
+    if name == COVER_POINT:
+        return {'0': 'up', '1': 'down'}.get(value, value)
+    return value
+
+
+def _program() -> Path:
+    """Return the program, as the timer adjusting switch times following the sun starts it."""
+    return Path(sys.argv[0]).absolute()
 
 
 def _sunset_mark(link: sunset.Link | None) -> str:
@@ -1875,9 +2295,11 @@ def _number(value: Any) -> int:
         return 0
 
 
-def run(stack: Stack, project: Project) -> int:
-    """Show the interface and return once the window is closed."""
+def run(stack: Stack, project: Project, minimized: bool = False) -> int:
+    """Show the interface, minimized if asked to, and return once the window is closed."""
     app = Application(stack, project)
+    if minimized:
+        app.iconify()
     app.mainloop()
     # A connection made with changed settings is the interface's own to close.
     if app.stack is not stack:

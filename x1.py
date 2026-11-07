@@ -10,6 +10,7 @@ Devices are addressed by a path made of the room they sit in, a slash and the
 device name, for example ``Flur/Deckenlampen Flur``.
 
     x1.py                           show the graphical interface
+    x1.py --minimized               show it minimized, as to take commands over MQTT
     x1.py list                      list all devices and the available groupings
     x1.py list --by location        list the devices grouped by location
     x1.py status                    show the status of every device
@@ -31,7 +32,7 @@ from pathlib import Path
 from typing import Callable
 
 import girax1
-from girax1 import schedule, sunset
+from girax1 import schedule, sunset, times
 from girax1.project import (BRIGHTNESS_POINT, COVER_POINT, STOP_POINT, SWITCH_POINT, WILDCARDS,
                             Device, Project)
 from girax1.stack import BRIGHTNESS_MAX, Stack
@@ -51,6 +52,10 @@ def main() -> int:
                         help=f'configuration file to use (default: {DEFAULT_CONFIG})')
     parser.add_argument('--version', action='version',
                         version=f'%(prog)s {girax1.__version__}')
+    minimized_help = 'start the graphical interface minimized (default: gui.minimized of ' \
+                     'the configuration file)'
+    parser.add_argument('--minimized', action=argparse.BooleanOptionalAction, default=None,
+                        help=minimized_help)
     # Without a command the graphical interface is shown.
     parser.set_defaults(run=command_gui)
     commands = parser.add_subparsers(dest='command', metavar='COMMAND')
@@ -155,8 +160,12 @@ def main() -> int:
                           help='do not remove the scenes when the last switch time goes')
     deleting.set_defaults(run=command_deltime)
 
-    commands.add_parser('gui', help='show the graphical user interface'
-                        ).set_defaults(run=command_gui)
+    showing = commands.add_parser('gui', help='show the graphical user interface')
+    # Left out of the namespace unless given, so that it does not override the
+    # option given before the command.
+    showing.add_argument('--minimized', action=argparse.BooleanOptionalAction,
+                         default=argparse.SUPPRESS, help=minimized_help)
+    showing.set_defaults(run=command_gui)
 
     sunsets = commands.add_parser(
         'sunset', help='settings for switch times following the sunset or sunrise',
@@ -237,18 +246,9 @@ def command_addtime(stack: Stack, project: Project, args: argparse.Namespace) ->
         return 1
     path = project.path(device)
     try:
-        days = schedule.parse_days(args.days)
-        if (sun := sunset.parse_when(args.time)) is None:
-            timer, index = schedule.add_time(stack, device, args.time, args.action, days,
-                                             args.active)
-        else:
-            event, offset = sun
-            if offset is None:
-                offset = sunset.default_offset(device, event)
-            timer, index = sunset.add_time(stack, _source(stack), device, path, offset,
-                                           args.action, days, args.active, args.not_before,
-                                           event)
-            sunset.ensure_timer(_source(stack), _program())
+        timer, index = times.add(stack, _source(stack), device, path, args.time, args.action,
+                                 schedule.parse_days(args.days), args.active, args.not_before,
+                                 _program())
     except (ValueError, sunset.SunsetError, schedule.ScheduleError, girax1.X1Error,
             TimeoutError) as e:
         print(f'{path}: {e}', file=sys.stderr)
@@ -265,8 +265,7 @@ def command_deltime(stack: Stack, project: Project, args: argparse.Namespace) ->
         return 1
     path = project.path(device)
     try:
-        timer = schedule.remove_time(stack, device, args.index, args.keep_scenes)
-        sunset.unlink(_source(stack), path, args.index)
+        timer = times.delete(stack, _source(stack), device, path, args.index, args.keep_scenes)
     except (sunset.SunsetError, schedule.ScheduleError, girax1.X1Error, TimeoutError) as e:
         print(f'{path}: {e}', file=sys.stderr)
         return 1
@@ -302,35 +301,10 @@ def command_settime(stack: Stack, project: Project, args: argparse.Namespace) ->
         return 1
     path = project.path(device)
     try:
-        days = None if args.days is None else schedule.parse_days(args.days)
-        link = _sunset_settings(stack).link(path, args.index)
-        sun = None if args.time is None else sunset.parse_when(args.time)
-        if sun is not None:
-            event, offset = sun
-            # A bare "sunset" keeps the offset a switch time following the
-            # sunset has, and so for the sunrise.
-            if offset is None:
-                offset = (link.offset if link is not None and link.event == event
-                          else sunset.default_offset(device, event))
-        elif args.not_before is not None:
-            # The earliest time only matters to a switch time following the sun.
-            if args.time is not None or link is None:
-                raise sunset.SunsetError('--not-before needs a time following the sun')
-            event, offset = link.event, link.offset
-        else:
-            event = offset = None
-        if offset is None:
-            timer = schedule.change_time(stack, device, args.index, when=args.time, days=days,
-                                         active=args.active, scene=args.scene)
-            if args.time is not None:
-                sunset.unlink(_source(stack), path, args.index)
-        else:
-            if args.scene is not None:
-                schedule.change_time(stack, device, args.index, scene=args.scene)
-            timer = sunset.change_time(stack, _source(stack), device, path, args.index, offset,
-                                       days=days, active=args.active,
-                                       earliest=args.not_before, event=event)
-            sunset.ensure_timer(_source(stack), _program())
+        timer = times.change(stack, _source(stack), device, path, args.index, when=args.time,
+                             days=None if args.days is None else schedule.parse_days(args.days),
+                             active=args.active, scene=args.scene, not_before=args.not_before,
+                             program=_program())
     except (ValueError, sunset.SunsetError, schedule.ScheduleError, girax1.X1Error,
             TimeoutError) as e:
         print(f'{path}: {e}', file=sys.stderr)
@@ -362,7 +336,8 @@ def command_gui(stack: Stack, project: Project, args: argparse.Namespace) -> int
     except ImportError as e:
         print(f'the graphical interface needs Tk: {e}', file=sys.stderr)
         return 1
-    return gui.run(stack, project)
+    minimized = args.minimized if args.minimized is not None else stack.config.minimized
+    return gui.run(stack, project, minimized)
 
 
 def command_sunset_status(stack: Stack, project: Project, args: argparse.Namespace) -> int:

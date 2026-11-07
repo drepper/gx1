@@ -87,6 +87,45 @@ and to an About window.  The appearance chosen is kept in
 The interface uses Tk, which comes with Python but is packaged separately on
 some systems (`python3-tkinter` on Fedora).
 
+### Commands over MQTT
+
+With an MQTT broker given in the `[mqtt]` table of the configuration file, the
+graphical interface also takes commands from it, from home automation for
+example.  Commands are JSON objects published on the topic, `girax1` unless
+another is configured; the answer to each goes to the topic with `/reply`
+appended, repeats the `id` of the command if it had one and says with `ok`
+whether it worked, with an `error` if not.
+
+    mosquitto_pub -t girax1 -m '{"id": 1, "command": "on", "device": "Flur/Deckenlampen Flur"}'
+    mosquitto_sub -t girax1/reply
+    {"command": "on", "id": 1, "ok": true, "results": [{"device": "Flur/Deckenlampen Flur", "ok": true, "state": "on"}]}
+
+Devices are named as on the command line: by path, by bare name, by a room
+with a trailing slash or by a pattern, and for the commands acting on several
+devices also as a list of those.
+
+| Command | Fields | Does |
+|---------|--------|------|
+| `on`, `off` | `device` | switch devices |
+| `dim` | `device`, `brightness` (0 to 100) | dim lights |
+| `up`, `down`, `stop` | `device` | drive or halt coverings |
+| `status` | `device` (all if left out) | the current values of devices |
+| `timers` | `device` | the switch times of one device |
+| `addtime` | `device`, `time`, `action`, `days` (daily), `active` (true), `not_before` | program a switch time; the time is a time of day or one following the sun such as `sunset+15` |
+| `settime` | `device`, `index` and what is to change of `time`, `days`, `action`, `active`, `not_before` | change a switch time |
+| `deltime` | `device`, `index` | delete a switch time |
+| `rooms`, `room` | `name` for `room` | show the room selection or a room |
+| `page` | `page`: a number, `next` or `previous` | turn the pages of a room |
+| `appearance` | `value`: `light`, `dark` or `auto` | the look of the interface |
+| `show`, `minimize`, `quit` | | the window |
+
+Days are given as on the command line, `weekdays` or `Mon-Fri,Sun` for
+example, or as a list of day names.  To run the interface in the background
+for this, start it minimized: with `x1.py --minimized`, or with
+`minimized = true` in the `[gui]` table of the configuration file.  The
+connection to the broker needs paho-mqtt (`python3-paho-mqtt` on Fedora) and
+is made anew whenever it is lost.
+
 ### Switch times following the sun
 
 A switch time can follow the sunset or the sunrise instead of acting at a fixed
@@ -145,7 +184,8 @@ those following the sunrise with ☼.
 - Python 3.12 or later.  The program and the library need nothing beyond the
   standard library.
 - Only `x1info.py`, which talks to the device portal, needs the `cryptography`
-  package listed in `requirements.txt`.
+  package listed in `requirements.txt`, and only commands over MQTT need
+  `paho-mqtt`.
 - On Linux, following the desktop appearance uses `gdbus` or `gsettings`.
 - Switch times following the sun need systemd to run the adjustments.
 

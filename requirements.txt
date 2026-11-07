@@ -1,1 +1,2 @@
 cryptography>=43
+paho-mqtt>=2

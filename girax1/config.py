@@ -35,8 +35,28 @@ SETTINGS: dict[str, type] = {
 }
 
 
+# Defaults of the MQTT broker which sends commands to the graphical interface.
+DEFAULT_MQTT_PORT = 1883
+DEFAULT_MQTT_PORT_TLS = 8883
+DEFAULT_MQTT_TOPIC = 'girax1'
+
+
 class ConfigError(Exception):
     """Raised when a configuration file is missing, malformed or incomplete."""
+
+
+@dataclass(frozen=True, slots=True)
+class MqttConfig:
+    """Where the graphical interface takes commands from: an MQTT broker and a topic."""
+
+    server: str
+    port: int = DEFAULT_MQTT_PORT
+    topic: str = DEFAULT_MQTT_TOPIC
+    username: str = ''
+    password: str = ''
+    tls: bool = False
+    # Empty to have the broker or the client make one up.
+    client_id: str = ''
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +76,10 @@ class Config:
     source: Path | None = None
     travel_default: float = DEFAULT_TRAVEL_SECONDS
     travel: dict[str, float] = field(default_factory=dict)
+    # The MQTT broker the graphical interface takes commands from, if any.
+    mqtt: MqttConfig | None = None
+    # Whether the graphical interface starts minimized.
+    minimized: bool = False
 
     def travel_seconds(self, path: str) -> float:
         """Return how long the named blind needs from fully open to fully closed."""
@@ -137,6 +161,9 @@ def _parse(data: dict[str, Any], source: Path) -> Config:
                               'number of seconds')
         travel[name] = float(seconds)
 
+    gui = _section(data, 'gui', source)
+    minimized = _typed(gui, 'gui', 'minimized', bool, False, source) is True
+
     # Without an explicit port the default follows the choice of protocol.
     use_tls = _typed(tls, 'tls', 'enabled', bool, True, source) is not False
     port = _typed(device, 'device', 'port', int, None, source)
@@ -157,7 +184,28 @@ def _parse(data: dict[str, Any], source: Path) -> Config:
                           or DEFAULT_TIMEOUT,
                   source=source,
                   travel_default=travel_default,
-                  travel=travel)
+                  travel=travel,
+                  mqtt=_mqtt(_section(data, 'mqtt', source), source),
+                  minimized=minimized)
+
+
+def _mqtt(table: dict[str, Any], source: Path) -> MqttConfig | None:
+    """Return the MQTT settings, or None if no server is given."""
+    server = _typed(table, 'mqtt', 'server', str, None, source)
+    if not server:
+        return None
+    tls = _typed(table, 'mqtt', 'tls', bool, False, source) is True
+    port = _typed(table, 'mqtt', 'port', int, None, source)
+    topic = _typed(table, 'mqtt', 'topic', str, DEFAULT_MQTT_TOPIC, source) or DEFAULT_MQTT_TOPIC
+    if any(c in topic for c in '+#') or topic.endswith('/'):
+        raise ConfigError(f'{source}: mqtt.topic must not contain wildcards or end in a slash')
+    return MqttConfig(server=server,
+                      port=port or (DEFAULT_MQTT_PORT_TLS if tls else DEFAULT_MQTT_PORT),
+                      topic=topic,
+                      username=_typed(table, 'mqtt', 'username', str, '', source) or '',
+                      password=_typed(table, 'mqtt', 'password', str, '', source) or '',
+                      tls=tls,
+                      client_id=_typed(table, 'mqtt', 'client_id', str, '', source) or '')
 
 
 def read_settings(source: Path) -> dict[str, Any]:

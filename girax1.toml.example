@@ -88,3 +88,32 @@ default_seconds = 30
 # make closing by a percentage accurate; the blinds in one house rarely agree.
 [blinds.seconds]
 # "Küche/Rollo links" = 28
+
+[gui]
+# Start the graphical interface minimized, for example to have it take commands
+# over MQTT in the background.  "x1 --minimized" and "x1 --no-minimized" say
+# otherwise for one run.
+# minimized = false
+
+[mqtt]
+# The MQTT broker the graphical interface takes commands from, as JSON on the
+# topic below; the answers go to the topic with "/reply" appended.  Without a
+# server no commands are taken.  Needs paho-mqtt.
+# server = "broker.example"
+
+# The port; when left out 1883, or 8883 with TLS.
+# port = 1883
+
+# The topic the commands come in on.
+# topic = "girax1"
+
+# Credentials, if the broker wants them.
+# username = "USERNAME"
+# password = "PASSWORD"
+
+# Whether to talk to the broker over TLS, checking its certificate against the
+# certificates of the system.
+# tls = false
+
+# The client id to use; when left out the broker makes one up.
+# client_id = "girax1"
